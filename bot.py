@@ -1205,9 +1205,10 @@ def main() -> None:
     cleanup_temp_files()
     
     # Настройка задач очистки временных файлов
-    job_queue = application.job_queue
-    if job_queue is not None:
-        try:
+    try:
+        # Полностью обернуть в try-except для предотвращения краша
+        job_queue = application.job_queue
+        if job_queue is not None:
             job_queue.run_repeating(cleanup_temp_files, interval=30*60, first=10)
             
             # Более тщательная очистка раз в день - в 3 часа ночи
@@ -1216,12 +1217,12 @@ def main() -> None:
             job_queue.run_daily(cleanup_temp_files, time=time_of_day)
             
             logger.info("Запланированы регулярные задачи очистки временных файлов")
-        except Exception as e:
-            logger.warning(f"Не удалось настроить задачи очистки: {e}")
-            print(f"Предупреждение: Не удалось настроить задачи очистки: {e}")
-    else:
-        logger.warning("JobQueue не доступна. Регулярная очистка временных файлов не будет выполняться.")
-        print("Предупреждение: JobQueue не доступна. Регулярная очистка будет отключена.")
+        else:
+            logger.warning("JobQueue не доступна. Регулярная очистка временных файлов не будет выполняться.")
+            print("Предупреждение: JobQueue не доступна. Регулярная очистка будет отключена.")
+    except Exception as e:
+        logger.warning(f"Не удалось настроить задачи очистки: {e}")
+        print(f"Предупреждение: Не удалось настроить задачи очистки: {e}")
     
     # Start the Bot
     print("Запуск бота через polling...")
