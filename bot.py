@@ -1201,32 +1201,48 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
     logger.info("Зарегистрированы обработчики для платежей")
 
-    # Выполняем первоначальную очистку временных файлов при запуске
+    # Очистка временных файлов при запуске
+    logger.info("Запуск плановой очистки временных файлов...")
     cleanup_temp_files()
     
-    # Настройка задач очистки временных файлов
+    # Настройка задач очистки временных файлов - полностью отключаем при ошибках
     try:
-        # Полностью обернуть в try-except для предотвращения краша
-        job_queue = application.job_queue
-        if job_queue is not None:
-            job_queue.run_repeating(cleanup_temp_files, interval=30*60, first=10)
-            
-            # Более тщательная очистка раз в день - в 3 часа ночи
-            from datetime import time
-            time_of_day = time(3, 0, 0)  # 3:00 AM
-            job_queue.run_daily(cleanup_temp_files, time=time_of_day)
-            
-            logger.info("Запланированы регулярные задачи очистки временных файлов")
-        else:
-            logger.warning("JobQueue не доступна. Регулярная очистка временных файлов не будет выполняться.")
-            print("Предупреждение: JobQueue не доступна. Регулярная очистка будет отключена.")
+        # Проверяем наличие job_queue в зависимостях
+        try:
+            from telegram.ext import JobQueue
+            has_job_queue = True
+        except ImportError:
+            has_job_queue = False
+            logger.warning("Модуль JobQueue не установлен. Установите python-telegram-bot[job-queue]")
+            print("Предупреждение: JobQueue не установлен. Регулярная очистка будет отключена.")
+        
+        # Только если модуль доступен, пытаемся настроить задачи
+        if has_job_queue:
+            job_queue = application.job_queue
+            if job_queue is not None:
+                # Запускаем задачу очистки каждые 30 минут
+                job_queue.run_repeating(cleanup_temp_files, interval=30*60, first=10)
+                logger.info("Запланирована регулярная очистка каждые 30 минут")
+                
+                # Более тщательная очистка раз в день - в 3 часа ночи
+                try:
+                    from datetime import time
+                    time_of_day = time(3, 0, 0)  # 3:00 AM
+                    job_queue.run_daily(cleanup_temp_files, time=time_of_day)
+                    logger.info("Запланирована ежедневная очистка в 3:00 AM")
+                except Exception as e:
+                    logger.warning(f"Не удалось настроить ежедневную очистку: {e}")
+            else:
+                logger.warning("JobQueue объект не доступен. Регулярная очистка отключена.")
+                print("Предупреждение: JobQueue объект не доступен. Регулярная очистка отключена.")
     except Exception as e:
-        logger.warning(f"Не удалось настроить задачи очистки: {e}")
-        print(f"Предупреждение: Не удалось настроить задачи очистки: {e}")
+        # Перехватываем все возможные ошибки, чтобы бот продолжал работать
+        logger.warning(f"Полностью отключена регулярная очистка из-за ошибки: {e}")
+        print(f"Предупреждение: Регулярная очистка отключена из-за ошибки: {e}")
     
     # Start the Bot
     print("Запуск бота через polling...")
-    logger.info("Запуск бота через polling...")
+    application.run_polling()
     print("Бот запущен и готов к работе! Нажмите Ctrl+C для остановки.")
     logger.info("Бот успешно запущен и ждет сообщения!")
     
