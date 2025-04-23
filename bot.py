@@ -443,6 +443,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup=reply_markup
         )
     
+    elif query.data == "use_my_name":
+        # Обработка кнопки "Использовать моё имя"
+        user_name = update.effective_user.first_name
+        
+        # Сохраняем имя пользователя для гравировки
+        if 'user_data' not in context.user_data:
+            context.user_data['user_data'] = {}
+        context.user_data['user_data']['custom_name'] = user_name
+        
+        # Убираем флаг ожидания имени и устанавливаем флаг ожидания аксессуаров
+        context.user_data['user_data']['waiting_for_toy_name'] = False
+        context.user_data['user_data']['waiting_for_accessories'] = True
+        
+        # Отправляем сообщение с просьбой указать аксессуары
+        balance = get_user_balance(user_id)
+        balance_text = f"Стоимость: ⭐ {GENERATION_COST} звезд | Ваш баланс: ⭐ {balance} звезд"
+        
+        await query.edit_message_text(
+            text=f"🔮 Отлично! Имя для гравировки: <b>{user_name}</b>\n\n"
+                 f"Теперь укажите аксессуары для вашей игрушки в следующем сообщении.\n"
+                 f"Например: солнцезащитные очки, микрофон, гитара\n\n"
+                 f"{balance_text}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Отменить", callback_data="generate_image")]
+            ]),
+            parse_mode="HTML"
+        )
+        return
+        
     elif query.data == "topup_balance":
         # Display star packages menu
         topup_text = "Выберите количество звезд для покупки:"
@@ -608,18 +637,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         # Проверяем, выбран ли стиль "Игрушка"
         if selected_style == "toy":
-            # Добавляем флаг, что ожидаем ввод аксессуаров
-            context.user_data['user_data']['waiting_for_accessories'] = True
-            
             # Проверяем, достаточно ли средств у пользователя
             if balance_sufficient:
-                # Отправляем сообщение с просьбой указать аксессуары
+                # Добавляем флаг, что ожидаем ввод имени для гравировки
+                context.user_data['user_data']['waiting_for_toy_name'] = True
+                
+                # Отправляем сообщение с просьбой указать имя для гравировки
                 await query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
-                         f"Пожалуйста, укажите аксессуары для вашей игрушки в следующем сообщении.\n"
-                         f"Например: солнцезащитные очки, микрофон, гитара\n\n"
+                         f"Сначала укажите имя для гравировки на коробке игрушки.\n"
+                         f"Это имя будет выгравировано на упаковке.\n\n"
                          f"{balance_text}",
                     reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Использовать моё имя", callback_data="use_my_name")],
                         [InlineKeyboardButton("Отменить", callback_data="generate_image")]
                     ]),
                     parse_mode="HTML"
@@ -1021,7 +1051,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 model="gpt-image-1",
                 image=img_file,
                 prompt=prompt,
-                size="1536x1024",
+                size="1024x1536",
                 n=1
             )
         
@@ -1170,7 +1200,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     model="gpt-image-1",
                     image=img_file,
                     prompt=prompt,
-                    size="1536x1024",
+                    size="1024x1536",
                     n=1
                 )
             
@@ -1253,7 +1283,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         model="gpt-image-1",
                         image=img_file,
                         prompt=f"Create a {selected_style} style portrait of this person with artistic details",
-                        size="1536x1024",
+                        size="1024x1536",
                         n=1
                     )
                 
@@ -1431,8 +1461,29 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Получаем user_id для проверки в базе данных
         user_id = update.effective_user.id
         
+        # Проверяем, ждет ли бот ввода имени для гравировки на игрушке
+        if 'user_data' in context.user_data and 'waiting_for_toy_name' in context.user_data['user_data'] and context.user_data['user_data']['waiting_for_toy_name']:
+            # Сохраняем введенное имя для гравировки
+            custom_name = update.message.text
+            context.user_data['user_data']['custom_name'] = custom_name
+            context.user_data['user_data']['waiting_for_toy_name'] = False
+            
+            # Устанавливаем флаг ожидания аксессуаров
+            context.user_data['user_data']['waiting_for_accessories'] = True
+            
+            # Отправляем сообщение с просьбой указать аксессуары
+            balance = get_user_balance(user_id)
+            await update.message.reply_text(
+                f"🔮 Отлично! Имя для гравировки: <b>{custom_name}</b>\n\n"
+                f"Теперь укажите аксессуары для вашей игрушки в следующем сообщении.\n"
+                f"Например: солнцезащитные очки, микрофон, гитара\n\n"
+                f"Стоимость: ⭐ {GENERATION_COST} звезд | Ваш баланс: ⭐ {balance} звезд",
+                parse_mode="HTML"
+            )
+            return
+            
         # Проверяем, ждет ли бот ввода аксессуаров для стиля "Игрушка"
-        if 'user_data' in context.user_data and 'waiting_for_accessories' in context.user_data['user_data'] and context.user_data['user_data']['waiting_for_accessories']:
+        elif 'user_data' in context.user_data and 'waiting_for_accessories' in context.user_data['user_data'] and context.user_data['user_data']['waiting_for_accessories']:
             # Сохраняем введенные аксессуары
             accessories = update.message.text
             context.user_data['user_data']['accessories'] = accessories
