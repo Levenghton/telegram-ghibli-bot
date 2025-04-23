@@ -65,11 +65,8 @@ STARS_PACKAGES = [
 # Initialize database
 def get_db_connection():
     """Create and return a connection to the SQLite database."""
-    # Используем директорию /data для постоянного хранения на Railway
-    db_dir = "/data"
-    # Если мы не на Railway или директория не существует, используем текущую директорию
-    if not os.path.exists(db_dir):
-        db_dir = os.path.dirname(os.path.abspath(__file__))
+    # Всегда используем директорию с ботом для хранения базы данных
+    db_dir = os.path.dirname(os.path.abspath(__file__))
     
     db_path = os.path.join(db_dir, 'users.db')
     logger.info(f"Подключение к базе данных по пути: {db_path}")
@@ -80,7 +77,7 @@ def backup_db():
     """Create a backup of the database."""
     try:
         # Получаем путь к базе данных
-        db_dir = "/data" if os.path.exists("/data") else os.path.dirname(os.path.abspath(__file__))
+        db_dir = os.path.dirname(os.path.abspath(__file__))  # Всегда используем директорию с ботом
         db_path = os.path.join(db_dir, 'users.db')
         
         # Создаем директорию для резервных копий
@@ -96,6 +93,11 @@ def backup_db():
             # Копируем базу данных
             shutil.copy2(db_path, backup_path)
             logger.info(f"Создана резервная копия базы данных: {backup_path}")
+            
+            # Также создаем постоянную резервную копию
+            permanent_backup_path = os.path.join(backup_dir, 'users_permanent_backup.db')
+            shutil.copy2(db_path, permanent_backup_path)
+            logger.info(f"Создана постоянная резервная копия базы данных: {permanent_backup_path}")
             
             # Удаляем старые резервные копии (оставляем только 5 последних)
             backup_files = sorted(glob.glob(os.path.join(backup_dir, 'users_backup_*.db')))
@@ -116,25 +118,37 @@ def restore_db_from_backup():
     """Restore database from the latest backup if the main database is corrupted or missing."""
     try:
         # Получаем путь к базе данных
-        db_dir = "/data" if os.path.exists("/data") else os.path.dirname(os.path.abspath(__file__))
+        db_dir = os.path.dirname(os.path.abspath(__file__))  # Всегда используем директорию с ботом
         db_path = os.path.join(db_dir, 'users.db')
         backup_dir = os.path.join(db_dir, 'backups')
         
-        # Проверяем, существуют ли резервные копии
-        if os.path.exists(backup_dir):
-            backup_files = sorted(glob.glob(os.path.join(backup_dir, 'users_backup_*.db')))
-            if backup_files:
-                latest_backup = backup_files[-1]
-                
-                # Копируем последнюю резервную копию в основной файл базы данных
-                shutil.copy2(latest_backup, db_path)
-                logger.info(f"База данных успешно восстановлена из резервной копии: {latest_backup}")
-                return True
-            else:
-                logger.warning("Резервные копии не найдены.")
+        # Создаем директорию для резервных копий, если она не существует
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        # Сначала проверяем наличие постоянной резервной копии
+        permanent_backup_path = os.path.join(backup_dir, 'users_permanent_backup.db')
+        if os.path.exists(permanent_backup_path):
+            # Копируем постоянную резервную копию в основной файл базы данных
+            shutil.copy2(permanent_backup_path, db_path)
+            logger.info(f"База данных успешно восстановлена из постоянной резервной копии: {permanent_backup_path}")
+            return True
+        
+        # Если постоянной резервной копии нет, проверяем наличие обычных резервных копий
+        backup_files = sorted(glob.glob(os.path.join(backup_dir, 'users_backup_*.db')))
+        if backup_files:
+            latest_backup = backup_files[-1]
+            
+            # Копируем последнюю резервную копию в основной файл базы данных
+            shutil.copy2(latest_backup, db_path)
+            logger.info(f"База данных успешно восстановлена из последней резервной копии: {latest_backup}")
+            
+            # Создаем постоянную резервную копию из последней резервной копии
+            shutil.copy2(latest_backup, permanent_backup_path)
+            logger.info(f"Создана постоянная резервная копия из последней резервной копии: {permanent_backup_path}")
+            return True
         else:
-            logger.warning(f"Директория с резервными копиями не найдена: {backup_dir}")
-        return False
+            logger.warning("Резервные копии не найдены.")
+            return False
     except Exception as e:
         logger.error(f"Ошибка при восстановлении базы данных из резервной копии: {e}")
         return False
@@ -290,7 +304,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     demo_files = [
         ("image ghibli.png", "Примеры стилизации фотографий"),
         ("disney.png", None),
-        ("toy.png", None)
+        ("toy.jpg", None)
     ]
     
     # Create InputMediaPhoto objects for each demo image
@@ -1510,7 +1524,7 @@ def main() -> None:
     print(f"Запуск бота @{BOT_USERNAME}...")
     
     # Пытаемся восстановить базу данных из резервной копии
-    db_dir = "/data" if os.path.exists("/data") else os.path.dirname(os.path.abspath(__file__))
+    db_dir = os.path.dirname(os.path.abspath(__file__))
     db_path = os.path.join(db_dir, 'users.db')
     
     # Проверяем, существует ли основная база данных
