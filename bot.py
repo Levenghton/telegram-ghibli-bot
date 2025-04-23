@@ -1204,7 +1204,7 @@ def setup_scheduled_tasks(updater):
     
     logger.info("Запланированы регулярные задачи очистки временных файлов")
 
-def text_message(update: Update, context: CallbackContext) -> None:
+def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages."""
     # Проверяем, что update и update.message не None
     if update and update.message:
