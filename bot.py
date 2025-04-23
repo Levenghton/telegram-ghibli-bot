@@ -12,7 +12,7 @@ import time
 import shutil
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
-from telegram.ext import Updater, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler, PreCheckoutQueryHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PreCheckoutQueryHandler
 from openai import OpenAI
 from openai import OpenAIError
 
@@ -180,7 +180,7 @@ def create_topup_menu():
     keyboard.append([InlineKeyboardButton("Вернуться", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-def start(update: Update, context: CallbackContext) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
     user = update.effective_user
     
@@ -206,7 +206,7 @@ def start(update: Update, context: CallbackContext) -> None:
         "<a href='https://telegra.ph/USLOVIYA-ISPOLZOVANIYA-04-05'>Условиями использования</a>"
     )
     
-    update.message.reply_html(welcome_text, disable_web_page_preview=True)
+    await update.message.reply_html(welcome_text, disable_web_page_preview=True)
     
     # Send demo images as a group
     demo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
@@ -234,7 +234,7 @@ def start(update: Update, context: CallbackContext) -> None:
     # Send media group
     if media_group:
         try:
-            context.bot.send_media_group(
+            await context.bot.send_media_group(
                 chat_id=update.effective_chat.id, 
                 media=media_group
             )
@@ -244,7 +244,7 @@ def start(update: Update, context: CallbackContext) -> None:
                 "🔮 Отправьте фото для генерации изображения в выбранном стиле.\n\n"
                 "🌟 Приглашайте друзей и получайте 50% от их покупок в виде звёзд."
             )
-            update.message.reply_text(action_message, reply_markup=create_main_menu())
+            await update.message.reply_text(action_message, reply_markup=create_main_menu())
             
         except Exception as e:
             logger.error(f"Error sending demo images: {e}")
@@ -253,7 +253,7 @@ def start(update: Update, context: CallbackContext) -> None:
                 file_path = os.path.join(demo_dir, file_name)
                 try:
                     with open(file_path, 'rb') as photo:
-                        context.bot.send_photo(
+                        await context.bot.send_photo(
                             chat_id=update.effective_chat.id,
                             photo=photo,
                             caption=caption
@@ -261,24 +261,24 @@ def start(update: Update, context: CallbackContext) -> None:
                 except Exception as e:
                     logger.error(f"Error sending individual demo image {file_name}: {e}")
 
-def menu_command(update: Update, context: CallbackContext) -> None:
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display the main menu."""
     user_id = update.effective_user.id
     balance = get_user_balance(user_id)
     
-    update.message.reply_text(
+    await update.message.reply_text(
         f"Главное меню\n\n"
         f"Ваш текущий баланс: ⭐ {balance} звезд\n"
         f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
         reply_markup=create_main_menu()
     )
 
-def help_command(update: Update, context: CallbackContext) -> None:
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
     user_id = update.effective_user.id
     balance = get_user_balance(user_id)
     
-    update.message.reply_text(
+    await update.message.reply_text(
         "Как использовать бота:\n\n"
         "1. Отправьте фотографию или нажмите кнопку 'Сгенерировать изображение'\n"
         "2. Подождите немного, пока я обрабатываю изображение\n"
@@ -293,7 +293,7 @@ def help_command(update: Update, context: CallbackContext) -> None:
         reply_markup=create_main_menu()
     )
 
-def balance_command(update: Update, context: CallbackContext) -> None:
+async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show user balance."""
     user_id = update.effective_user.id
     balance = get_user_balance(user_id)
@@ -305,16 +305,16 @@ def balance_command(update: Update, context: CallbackContext) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    update.message.reply_text(
+    await update.message.reply_text(
         f"Ваш текущий баланс: ⭐ {balance} звезд\n"
         f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
         reply_markup=reply_markup
     )
 
-def button_handler(update: Update, context: CallbackContext) -> None:
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle button presses."""
     query = update.callback_query
-    query.answer()
+    await query.answer()
     
     user_id = query.from_user.id
     balance = get_user_balance(user_id)
@@ -336,7 +336,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        query.edit_message_text(
+        await query.edit_message_text(
             text="Выберите стиль для вашего изображения:",
             reply_markup=reply_markup
         )
@@ -349,7 +349,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        query.edit_message_text(
+        await query.edit_message_text(
             text=f"Ваш текущий баланс: ⭐ {balance} звезд\n"
                 f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
             reply_markup=reply_markup
@@ -362,14 +362,14 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            context.bot.send_message(
+            await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=topup_text,
                 reply_markup=create_topup_menu()
             )
         else:
             # Если это обычное сообщение, редактируем его
-            query.edit_message_text(
+            await query.edit_message_text(
                 text=topup_text,
                 reply_markup=create_topup_menu()
             )
@@ -407,7 +407,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             
             try:
                 # Отправляем счет на оплату
-                context.bot.send_invoice(
+                await context.bot.send_invoice(
                     chat_id=user_id,
                     title=title,
                     description=description,
@@ -423,7 +423,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
                     start_parameter="pay"  # Добавляем start_parameter для правильной обработки
                 )
                 
-                query.edit_message_text(
+                await query.edit_message_text(
                     text=f"Счет на оплату {stars_amount} звезд создан. Пожалуйста, оплатите его, чтобы пополнить баланс.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
                 )
@@ -432,7 +432,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
                 logger.info(f"Счет на оплату {stars_amount} звезд успешно создан для пользователя {user_id}")
             except Exception as e:
                 logger.error(f"Ошибка при создании счета: {e}")
-                query.edit_message_text(
+                await query.edit_message_text(
                     text=f"Произошла ошибка при создании счета. Пожалуйста, попробуйте позже.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
                 )
@@ -452,13 +452,13 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             "3. Отправьте ее друзьям"
         )
         
-        query.edit_message_text(
+        await query.edit_message_text(
             text=message,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
         )
         
     elif query.data == "help":
-        query.edit_message_text(
+        await query.edit_message_text(
             text="Как использовать бота:\n\n"
                 "1. Отправьте фотографию или нажмите кнопку 'Сгенерировать изображение'\n"
                 "2. Выберите желаемый стиль (различные варианты доступны)\n"
@@ -519,8 +519,8 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="back_to_menu")])
         
         # Отправляем новое сообщение с инструкцией и призывом к действию
-        query.edit_message_text(
-            text=f"💫 Вы выбрали стиль: <b>{style_name}</b>\n\n"
+        await query.edit_message_text(
+            text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                  f"{action_text}\n\n"
                  f"{balance_text}",
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -547,14 +547,14 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            context.bot.send_message(
+            await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="Выберите стиль для вашего изображения:",
                 reply_markup=reply_markup
             )
         else:
             # Если это обычное сообщение, редактируем его
-            query.edit_message_text(
+            await query.edit_message_text(
                 text="Выберите стиль для вашего изображения:",
                 reply_markup=reply_markup
             )
@@ -567,19 +567,19 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            context.bot.send_message(
+            await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=menu_text,
                 reply_markup=create_main_menu()
             )
         else:
             # Если это обычное сообщение, редактируем его
-            query.edit_message_text(
+            await query.edit_message_text(
                 text=menu_text,
                 reply_markup=create_main_menu()
             )
 
-def precheckout_callback(update: Update, context: CallbackContext) -> None:
+async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the pre-checkout callback."""
     query = update.pre_checkout_query
     
@@ -595,17 +595,17 @@ def precheckout_callback(update: Update, context: CallbackContext) -> None:
         # Validate the payment
         if user_id and stars:
             # Accept the payment
-            query.answer(ok=True)
+            await query.answer(ok=True)
             logger.info(f"Предварительная проверка платежа одобрена: {stars} звезд для пользователя {user_id}")
         else:
             # Reject the payment
-            query.answer(ok=False, error_message="Неверные данные платежа. Пожалуйста, попробуйте снова.")
+            await query.answer(ok=False, error_message="Неверные данные платежа. Пожалуйста, попробуйте снова.")
             logger.warning(f"Предварительная проверка платежа отклонена: неверные данные")
     except Exception as e:
         logger.error(f"Ошибка при обработке предварительной проверки платежа: {e}")
-        query.answer(ok=False, error_message="Произошла ошибка при обработке платежа. Пожалуйста, попробуйте снова.")
+        await query.answer(ok=False, error_message="Произошла ошибка при обработке платежа. Пожалуйста, попробуйте снова.")
 
-def successful_payment_callback(update: Update, context: CallbackContext) -> None:
+async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle successful payments."""
     payment = update.message.successful_payment
     
@@ -624,7 +624,7 @@ def successful_payment_callback(update: Update, context: CallbackContext) -> Non
             new_balance = get_user_balance(user_id)
             
             # Send confirmation message
-            update.message.reply_text(
+            await update.message.reply_text(
                 f"✅ Оплата успешно выполнена!\n\n"
                 f"Добавлено: ⭐ {stars} звезд\n"
                 f"Текущий баланс: ⭐ {new_balance} звезд\n\n"
@@ -634,26 +634,26 @@ def successful_payment_callback(update: Update, context: CallbackContext) -> Non
             
             logger.info(f"Пользователь {user_id} успешно пополнил баланс на {stars} звезд. Новый баланс: {new_balance}")
         else:
-            update.message.reply_text(
+            await update.message.reply_text(
                 "Произошла ошибка при обработке платежа. Пожалуйста, свяжитесь с поддержкой.",
                 reply_markup=create_main_menu()
             )
             logger.warning(f"Ошибка при обработке успешного платежа: отсутствуют данные user_id или stars")
     except Exception as e:
         logger.error(f"Ошибка при обработке успешного платежа: {e}")
-        update.message.reply_text(
+        await update.message.reply_text(
             "Произошла ошибка при обработке платежа. Пожалуйста, свяжитесь с поддержкой.",
             reply_markup=create_main_menu()
         )
 
-def process_photo(update: Update, context: CallbackContext) -> None:
+async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Process a photo and convert it to the selected style."""
     user_id = update.effective_user.id
     
     # Check if user has sufficient balance
     if not check_balance_sufficient(user_id):
         balance = get_user_balance(user_id)
-        update.message.reply_text(
+        await update.message.reply_text(
             f"У вас недостаточно звезд для генерации изображения.\n"
             f"Ваш текущий баланс: ⭐ {balance} звезд\n"
             f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n"
@@ -690,15 +690,15 @@ def process_photo(update: Update, context: CallbackContext) -> None:
     
     # Выбираем случайное сообщение
     import random
-    status_message = update.message.reply_text(random.choice(status_messages))
+    status_message = await update.message.reply_text(random.choice(status_messages))
     
     try:
         # Get the photo with the highest resolution
         photo = update.message.photo[-1]
         
         # Download the photo
-        photo_file = context.bot.get_file(photo.file_id)
-        photo_bytes = photo_file.download_as_bytearray()
+        photo_file = await context.bot.get_file(photo.file_id)
+        photo_bytes = await photo_file.download_as_bytearray()
         
         # Используем заранее созданный каталог для временных файлов
         tmp_dir = TEMP_DIR
@@ -723,171 +723,225 @@ def process_photo(update: Update, context: CallbackContext) -> None:
             "Записываю все ваши характерные черты... 📝"
         ]
         
-        context.bot.edit_message_text(
+        await context.bot.edit_message_text(
             chat_id=update.effective_chat.id,
             message_id=status_message.message_id,
-            text=random.choice(analysis_messages)
-        )      
-        try:
-            # Используем GPT-4o для анализа изображения
-            with open(file_path, "rb") as img_file:
-                b64_image = base64.b64encode(img_file.read()).decode('utf-8')
-            
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are an image analysis assistant that provides detailed descriptions of photos to be used for image generation. Be specific and detailed."
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Please describe this person briefly, focusing only on visible features like hairstyle, facial features, clothing, accessories, and the background setting. No interpretation, just physical description."},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{b64_image}",
-                                    "detail": "high"
-                                }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=500
+            text=random.choice(creation_messages)
+        )
+        
+        # Выбираем промпт в зависимости от выбранного стиля
+        if selected_style == "ghibli":
+            prompt = """
+            Transform this person into a Studio Ghibli animation character. 
+            Use Ghibli's distinctive hand-drawn style with soft watercolor backgrounds and warm color palette.
+            Add characteristic Ghibli lighting and atmosphere.
+            Maintain the person's likeness and key features while adapting to Ghibli style.
+            Include some Ghibli-style environment elements that complement the character.
+            """
+        elif selected_style == "disney":
+            prompt = """
+            Transform this person into a Disney 3D animation character.
+            Use vibrant colors, expressive features, and Disney's characteristic lighting style.
+            Add Disney-style magical environment elements.
+            Maintain the person's likeness and key features while adapting to Disney animation style.
+            """
+        elif selected_style == "lego":
+            prompt = """
+            Transform this person into a LEGO minifigure.
+            Use authentic LEGO minifigure appearance with plastic toy aesthetic.
+            Add characteristic LEGO shapes and bright LEGO colors palette.
+            Include a LEGO brick background/environment.
+            Maintain the person's distinguishing features translated to LEGO style.
+            """
+        elif selected_style == "simpsons":
+            prompt = """
+            Transform this person into a Simpsons character.
+            Use classic Simpsons yellow skin and distinctive art style.
+            Add Simpsons character proportions with overbite and four fingers per hand.
+            Include typical Simpsons background elements.
+            Maintain the person's distinguishing features adapted to Simpsons style.
+            """
+        elif selected_style == "soviet":
+            prompt = """
+            Transform this person into a Soviet animation character from the 1970s-80s.
+            Use soft, painterly style with muted color palette.
+            Add characteristic round facial features and expressive eyes.
+            Include gentle outlines and watercolor-like textures.
+            Add nostalgic Soviet-era background elements.
+            """
+        elif selected_style == "marvel":
+            prompt = """
+            Transform this person into a Marvel Comics character.
+            Use dynamic Marvel comic book illustration style with bold outlines and dramatic shading.
+            Add vibrant comic book colors and contrast.
+            Include heroic pose and composition with comic panel background elements.
+            Maintain the person's distinguishing features adapted to Marvel style.
+            """
+        elif selected_style == "blythe":
+            prompt = """
+            Transform this person into a Blythe doll.
+            Use characteristic Blythe doll aesthetic with large head and oversized eyes.
+            Add distinctive glossy finish and porcelain-like skin texture.
+            Include pastel or vibrant colors typical for Blythe dolls.
+            Add cute, slightly dreamy expression and Blythe doll fashion elements.
+            """
+        else:
+            # Default to Ghibli if style not recognized
+            prompt = """
+            Transform this person into a Studio Ghibli animation character. 
+            Use Ghibli's distinctive hand-drawn style with soft watercolor backgrounds and warm color palette.
+            Add characteristic Ghibli lighting and atmosphere.
+            Maintain the person's likeness and key features while adapting to Ghibli style.
+            Include some Ghibli-style environment elements that complement the character.
+            """
+        
+        # Используем метод edit вместо generate для лучших результатов
+        with open(file_path, "rb") as img_file:
+            image_response = client.images.edit(
+                model="gpt-image-1",
+                image=img_file,
+                prompt=prompt,
+                size="1024x1024",
+                n=1
             )
+        
+        # Получаем изображение в формате base64
+        image_base64 = image_response.data[0].b64_json
+        image_bytes = base64.b64decode(image_base64)
+        
+        # Сохраняем изображение во временный файл для отправки
+        generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
+        with open(generated_file_path, "wb") as f:
+            f.write(image_bytes)
             
-            # Получаем описание изображения
-            person_description = response.choices[0].message.content
-            logger.info(f"Получено описание для фото: {person_description[:100]}...")
+        logger.info(f"Изображение успешно сгенерировано и сохранено в {generated_file_path}")
+        
+        # Удаляем временный файл изображения, чтобы не занимать дисковое пространство
+        try:
+            os.remove(file_path)
+            logger.info(f"Временный файл {file_path} успешно удален")
+        except Exception as file_error:
+            logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
+        
+        # Deduct stars from user balance
+        update_user_balance(user_id, -GENERATION_COST)
+        current_balance = get_user_balance(user_id)
+        
+        # Создаем кнопки для добавления после генерации - строго 3 кнопки
+        keyboard = [
+            [InlineKeyboardButton("Сгенерировать еще", callback_data="generate_new")],
+            [InlineKeyboardButton("Купить звезды", callback_data="topup_balance")],
+            [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Отправляем изображение пользователю из локального файла
+        with open(generated_file_path, 'rb') as photo_file:
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=photo_file,
+                caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
+                reply_markup=reply_markup
+            )
+        
+        # Удаляем сгенерированный файл после отправки
+        try:
+            os.remove(generated_file_path)
+            logger.info(f"Сгенерированный файл {generated_file_path} успешно удален")
+        except Exception as file_error:
+            logger.warning(f"Не удалось удалить сгенерированный файл {generated_file_path}: {file_error}")
+        
+        # Удаляем статусное сообщение
+        try:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=status_message.message_id
+            )
+        except Exception as msg_error:
+            logger.warning(f"Не удалось удалить статусное сообщение: {msg_error}")
             
-            # Теперь используем описание с DALL-E 3
-            # Создаем список разнообразных сообщений для фазы создания
-            creation_messages = [
-                f"Создаю изображение в стиле {style_name}... 🎨",
-                f"Достаю краски и кисти для вашего портрета в стиле {style_name}... 🧘",
-                f"Делаю из вас персонажа в стиле {style_name}... 🌠",
-                f"Художественная магия превращает вас в стиль {style_name}... ✨",
-                f"Делаю вас звездой в стиле {style_name}... 🌟",
-                f"Нейросеть творит чудеса в стиле {style_name}... 💫",
-                f"Наношу последние штрихи на изображение в стиле {style_name}... 🎨"
-            ]
-            
-            context.bot.edit_message_text(
+    except OpenAIError as e:
+        logger.error(f"Ошибка OpenAI при обработке изображения: {e}")
+        
+        # Удаляем временный файл в случае ошибки
+        try:
+            os.remove(file_path)
+            logger.info(f"Временный файл {file_path} удален после ошибки OpenAI")
+        except Exception as file_error:
+            logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
+        
+        # Запасной вариант: попробуем DALL-E 2 вариации
+        try:
+            await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=status_message.message_id,
-                text=random.choice(creation_messages)
+                text="Использую альтернативный метод обработки... 🖌️"
             )
             
             # Выбираем промпт в зависимости от выбранного стиля
             if selected_style == "ghibli":
-                prompt = f"""
-                Create a Studio Ghibli style animation portrait of this person: {person_description}
-                
-                The image should have:
-                - Distinctive Ghibli hand-drawn animation style
-                - Soft watercolor backgrounds
-                - Characteristic Ghibli lighting and atmosphere
-                - Maintain the person's likeness and key features
-                - Use the Ghibli color palette with warm, saturated colors
-                - Include some Ghibli-style environment elements
-                
-                I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the Ghibli style adaptation.
+                prompt = """
+                Transform this person into a Studio Ghibli animation character. 
+                Use Ghibli's distinctive hand-drawn style with soft watercolor backgrounds and warm color palette.
+                Add characteristic Ghibli lighting and atmosphere.
+                Maintain the person's likeness and key features while adapting to Ghibli style.
+                Include some Ghibli-style environment elements that complement the character.
                 """
             elif selected_style == "disney":
-                prompt = f"""
-                Create a Disney animation style portrait of this person: {person_description}
-                
-                The image should have:
-                - Classic Disney 3D animation style
-                - Vivid colors and expressive features
-                - Characteristic Disney lighting and atmosphere
-                - Maintain the person's likeness and key features
-                - Include some Disney-style magical environment elements
-                
-                I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the Disney style adaptation.
+                prompt = """
+                Transform this person into a Disney 3D animation character.
+                Use vibrant colors, expressive features, and Disney's characteristic lighting style.
+                Add Disney-style magical environment elements.
+                Maintain the person's likeness and key features while adapting to Disney animation style.
                 """
             elif selected_style == "lego":
-                prompt = f"""
-                Create a LEGO minifigure style portrait of this person: {person_description}
-                
-                The image should have:
-                - Authentic LEGO minifigure appearance
-                - Plastic toy aesthetic with characteristic LEGO shapes
-                - Bright LEGO colors palette
-                - Maintain distinguishing features translated to LEGO style
-                - Include a LEGO brick background/environment
-                
-                I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the LEGO style adaptation.
+                prompt = """
+                Transform this person into a LEGO minifigure.
+                Use authentic LEGO minifigure appearance with plastic toy aesthetic.
+                Add characteristic LEGO shapes and bright LEGO colors palette.
+                Include a LEGO brick background/environment.
+                Maintain the person's distinguishing features translated to LEGO style.
                 """
             elif selected_style == "simpsons":
-                prompt = f"""
-                Create a Simpsons style animation portrait of this person: {person_description}
-                
-                The image should have:
-                - Classic Simpsons yellow skin and distinctive art style
-                - Simpsons character proportions with overbite
-                - Four fingers per hand
-                - Typical Simpsons background elements
-                - Maintain the person's distinguishing features adapted to Simpsons style
-                
-                I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the Simpsons style adaptation.
+                prompt = """
+                Transform this person into a Simpsons character.
+                Use classic Simpsons yellow skin and distinctive art style.
+                Add Simpsons character proportions with overbite and four fingers per hand.
+                Include typical Simpsons background elements.
+                Maintain the person's distinguishing features adapted to Simpsons style.
                 """
             elif selected_style == "soviet":
-                prompt = f"""
-                Create a Soviet animation style portrait of this person: {person_description}
-                
-                The image should have:
-                - Classic Soviet animation aesthetic from the 1970s-80s
-                - Soft, painterly style with muted color palette
-                - Characteristic round facial features and expressive eyes
-                - Gentle outlines and watercolor-like textures
-                - Nostalgic Soviet-era background elements
-                
-                I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the Soviet animation style adaptation.
+                prompt = """
+                Transform this person into a Soviet animation character from the 1970s-80s.
+                Use soft, painterly style with muted color palette.
+                Add characteristic round facial features and expressive eyes.
+                Include gentle outlines and watercolor-like textures.
+                Add nostalgic Soviet-era background elements.
                 """
             elif selected_style == "marvel":
-                prompt = f"""
-                Create a Marvel Comics style portrait of this person: {person_description}
-                
-                The image should have:
-                - Dynamic Marvel comic book illustration style
-                - Bold outlines and dramatic shading
-                - Vibrant comic book colors and contrast
-                - Heroic pose and composition
-                - Comic panel background elements
-                - Maintain the person's distinguishing features adapted to Marvel style
-                
-                I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the Marvel style adaptation.
+                prompt = """
+                Transform this person into a Marvel Comics character.
+                Use dynamic Marvel comic book illustration style with bold outlines and dramatic shading.
+                Add vibrant comic book colors and contrast.
+                Include heroic pose and composition with comic panel background elements.
+                Maintain the person's distinguishing features adapted to Marvel style.
                 """
             elif selected_style == "blythe":
-                prompt = f"""
-                Create a Blythe doll style portrait of this person: {person_description}
-                
-                The image should have:
-                - Characteristic Blythe doll aesthetic with large head and oversized eyes
-                - Distinctive glossy finish and porcelain-like skin texture
-                - Pastel or vibrant colors typical for Blythe dolls
-                - Detailed doll-like features while maintaining recognizable elements of the person
-                - Cute, slightly dreamy expression
-                - Include some Blythe doll fashion elements and accessories
-                
-                I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the Blythe doll style adaptation. Make this into a Blythe doll.
+                prompt = """
+                Transform this person into a Blythe doll.
+                Use characteristic Blythe doll aesthetic with large head and oversized eyes.
+                Add distinctive glossy finish and porcelain-like skin texture.
+                Include pastel or vibrant colors typical for Blythe dolls.
+                Add cute, slightly dreamy expression and Blythe doll fashion elements.
                 """
             else:
                 # Default to Ghibli if style not recognized
-                prompt = f"""
-                Create a Studio Ghibli style animation portrait of this person: {person_description}
-                
-                The image should have:
-                - Distinctive Ghibli hand-drawn animation style
-                - Soft watercolor backgrounds
-                - Characteristic Ghibli lighting and atmosphere
-                - Maintain the person's likeness and key features
-                - Use the Ghibli color palette with warm, saturated colors
-                - Include some Ghibli-style environment elements
-                
-                I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the Ghibli style adaptation.
+                prompt = """
+                Transform this person into a Studio Ghibli animation character. 
+                Use Ghibli's distinctive hand-drawn style with soft watercolor backgrounds and warm color palette.
+                Add characteristic Ghibli lighting and atmosphere.
+                Maintain the person's likeness and key features while adapting to Ghibli style.
+                Include some Ghibli-style environment elements that complement the character.
                 """
             
             # Используем метод edit вместо generate для лучших результатов
@@ -932,7 +986,7 @@ def process_photo(update: Update, context: CallbackContext) -> None:
             
             # Отправляем изображение пользователю из локального файла
             with open(generated_file_path, 'rb') as photo_file:
-                context.bot.send_photo(
+                await context.bot.send_photo(
                     chat_id=update.effective_chat.id,
                     photo=photo_file,
                     caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
@@ -948,7 +1002,7 @@ def process_photo(update: Update, context: CallbackContext) -> None:
             
             # Удаляем статусное сообщение
             try:
-                context.bot.delete_message(
+                await context.bot.delete_message(
                     chat_id=update.effective_chat.id,
                     message_id=status_message.message_id
                 )
@@ -967,7 +1021,7 @@ def process_photo(update: Update, context: CallbackContext) -> None:
             
             # Запасной вариант: попробуем DALL-E 2 вариации
             try:
-                context.bot.edit_message_text(
+                await context.bot.edit_message_text(
                     chat_id=update.effective_chat.id,
                     message_id=status_message.message_id,
                     text="Использую альтернативный метод обработки... 🖌️"
@@ -1000,7 +1054,7 @@ def process_photo(update: Update, context: CallbackContext) -> None:
                 
                 # Отправляем изображение пользователю из локального файла
                 with open(backup_file_path, 'rb') as photo_file:
-                    context.bot.send_photo(
+                    await context.bot.send_photo(
                         chat_id=update.effective_chat.id,
                         photo=photo_file,
                         caption=f"Ваше изображение (альтернативный метод)! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд"
@@ -1014,14 +1068,14 @@ def process_photo(update: Update, context: CallbackContext) -> None:
                     logger.warning(f"Не удалось удалить временный файл {backup_file_path}: {file_error}")
                 
                 # Удаляем статусное сообщение
-                context.bot.delete_message(
+                await context.bot.delete_message(
                     chat_id=update.effective_chat.id,
                     message_id=status_message.message_id
                 )
                 
             except Exception as e2:
                 logger.error(f"Ошибка альтернативного метода: {e2}")
-                context.bot.edit_message_text(
+                await context.bot.edit_message_text(
                     chat_id=update.effective_chat.id,
                     message_id=status_message.message_id,
                     text=f"К сожалению, не удалось обработать изображение: {str(e2)}"
@@ -1030,16 +1084,30 @@ def process_photo(update: Update, context: CallbackContext) -> None:
     except Exception as e:
         logger.error(f"Общая ошибка: {e}")
         try:
-            context.bot.edit_message_text(
+            await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=status_message.message_id,
                 text=f"Произошла ошибка при обработке изображения: {str(e)}"
             )
         except:
-            update.message.reply_text(f"Произошла ошибка при обработке изображения: {str(e)}")
+            await update.message.reply_text(f"Произошла ошибка при обработке изображения: {str(e)}")
+
+async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка текстовых сообщений."""
+    user_id = update.effective_user.id
+    balance = get_user_balance(user_id)
+    
+    # Отправляем сообщение с инструкциями
+    await update.message.reply_text(
+        "Привет! Я могу превратить вашу фотографию в стиле различных анимационных студий.\n\n"
+        "Просто отправьте мне фотографию или выберите опцию в меню.\n\n"
+        f"Ваш текущий баланс: ⭐ {balance} звезд\n"
+        f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд",
+        reply_markup=create_main_menu()
+    )
 
 # Функции управления временными файлами
-def cleanup_temp_files(context: CallbackContext = None):
+def cleanup_temp_files(context: ContextTypes.DEFAULT_TYPE = None):
     """Очистка временных файлов изображений для экономии места на PythonAnywhere."""
     logger.info("Запуск плановой очистки временных файлов...")
     
@@ -1188,65 +1256,68 @@ def main() -> None:
     print("Продолжаем запуск бота...")
     
     try:
-        # Create the Updater with extended timeout settings
-        updater = Updater(TELEGRAM_TOKEN, use_context=True, request_kwargs={'read_timeout': 30, 'connect_timeout': 30})
+        # Create the Application with extended timeout settings
+        from telegram.ext import ApplicationBuilder
+        
+        # Создаем приложение с расширенными настройками таймаута
+        application = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).connect_timeout(30).build()
         logger.info(f"Бот инициализирован с токеном: {TELEGRAM_TOKEN[:5]}...")
 
-        # Get the dispatcher to register handlers
-        dispatcher = updater.dispatcher
-
         # Регистрируем обработчик ошибок
-        def error_handler(update, context):
+        async def error_handler(update, context):
             logger.error(f"Ошибка при обработке обновления: {context.error}")
             if update:
                 logger.error(f"Обновление, вызвавшее ошибку: {update}")
                 
-        dispatcher.add_error_handler(error_handler)
+        application.add_error_handler(error_handler)
         
         # Add handlers
-        dispatcher.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("start", start))
         logger.info("Зарегистрирован обработчик /start")
         
-        dispatcher.add_handler(CommandHandler("menu", menu_command))
+        application.add_handler(CommandHandler("menu", menu_command))
         logger.info("Зарегистрирован обработчик /menu")
         
-        dispatcher.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("help", help_command))
         logger.info("Зарегистрирован обработчик /help")
         
-        dispatcher.add_handler(CommandHandler("balance", balance_command))
+        application.add_handler(CommandHandler("balance", balance_command))
         logger.info("Зарегистрирован обработчик /balance")
         
-        dispatcher.add_handler(CallbackQueryHandler(button_handler))
+        application.add_handler(CallbackQueryHandler(button_handler))
         logger.info("Зарегистрирован обработчик для кнопок")
         
-        dispatcher.add_handler(MessageHandler(filters.PHOTO, process_photo))
+        application.add_handler(MessageHandler(filters.PHOTO, process_photo))
         logger.info("Зарегистрирован обработчик для фотографий")
         
-        dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
         logger.info("Зарегистрирован обработчик для текстовых сообщений")
         
         # Add payment handlers
-        dispatcher.add_handler(PreCheckoutQueryHandler(precheckout_callback))
-        dispatcher.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+        application.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+        application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
         logger.info("Зарегистрированы обработчики для платежей")
 
         # Start the Bot with more log info
-        print("Запуск бота через start_polling()...")
-        logger.info("Запуск бота через start_polling()...")
+        print("Запуск бота через polling...")
+        logger.info("Запуск бота через polling...")
         
         # Настройка задач очистки временных файлов
-        setup_scheduled_tasks(updater)
-        
-        # Start the Bot
-        updater.start_polling()
-        print("Бот запущен и готов к работе! Нажмите Ctrl+C для остановки.")
-        logger.info("Бот успешно запущен и ждет сообщения!")
+        # Обновленная версия для python-telegram-bot v20.x
+        job_queue = application.job_queue
+        if job_queue is not None:
+            job_queue.run_repeating(cleanup_temp_files, interval=30*60, first=10)
+            logger.info("Задача очистки временных файлов добавлена в расписание")
         
         # Выполняем первоначальную очистку временных файлов при запуске
         cleanup_temp_files()
         
+        # Start the Bot
+        print("Бот запущен и готов к работе! Нажмите Ctrl+C для остановки.")
+        logger.info("Бот успешно запущен и ждет сообщения!")
+        
         # Run the bot until you press Ctrl-C or the process receives SIGINT, SIGTERM or SIGABRT
-        updater.idle()
+        application.run_polling()
         
     except Exception as e:
         logger.error(f"Критическая ошибка при запуске бота: {e}")
