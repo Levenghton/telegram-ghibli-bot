@@ -1002,7 +1002,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 model="gpt-image-1",
                 image=img_file,
                 prompt=prompt,
-                size="1024x1024",
+                size="1536x1024",
                 n=1
             )
         
@@ -1151,7 +1151,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     model="gpt-image-1",
                     image=img_file,
                     prompt=prompt,
-                    size="1024x1024",
+                    size="1536x1024",
                     n=1
                 )
             
@@ -1234,7 +1234,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         model="gpt-image-1",
                         image=img_file,
                         prompt=f"Create a {selected_style} style portrait of this person with artistic details",
-                        size="1024x1024",
+                        size="1536x1024",
                         n=1
                     )
                 
