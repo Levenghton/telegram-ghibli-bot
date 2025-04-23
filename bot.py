@@ -65,8 +65,79 @@ STARS_PACKAGES = [
 # Initialize database
 def get_db_connection():
     """Create and return a connection to the SQLite database."""
-    conn = sqlite3.connect('users.db')
+    # Используем директорию /data для постоянного хранения на Railway
+    db_dir = "/data"
+    # Если мы не на Railway или директория не существует, используем текущую директорию
+    if not os.path.exists(db_dir):
+        db_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    db_path = os.path.join(db_dir, 'users.db')
+    logger.info(f"Подключение к базе данных по пути: {db_path}")
+    conn = sqlite3.connect(db_path)
     return conn
+
+def backup_db():
+    """Create a backup of the database."""
+    try:
+        # Получаем путь к базе данных
+        db_dir = "/data" if os.path.exists("/data") else os.path.dirname(os.path.abspath(__file__))
+        db_path = os.path.join(db_dir, 'users.db')
+        
+        # Создаем директорию для резервных копий
+        backup_dir = os.path.join(db_dir, 'backups')
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        # Создаем имя файла с текущей датой
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_path = os.path.join(backup_dir, f'users_backup_{timestamp}.db')
+        
+        # Проверяем, существует ли исходная база данных
+        if os.path.exists(db_path):
+            # Копируем базу данных
+            shutil.copy2(db_path, backup_path)
+            logger.info(f"Создана резервная копия базы данных: {backup_path}")
+            
+            # Удаляем старые резервные копии (оставляем только 5 последних)
+            backup_files = sorted(glob.glob(os.path.join(backup_dir, 'users_backup_*.db')))
+            if len(backup_files) > 5:
+                for old_backup in backup_files[:-5]:
+                    os.remove(old_backup)
+                    logger.info(f"Удалена старая резервная копия: {old_backup}")
+            
+            return True
+        else:
+            logger.warning(f"Не удалось создать резервную копию: файл базы данных не найден: {db_path}")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка при создании резервной копии базы данных: {e}")
+        return False
+
+def restore_db_from_backup():
+    """Restore database from the latest backup if the main database is corrupted or missing."""
+    try:
+        # Получаем путь к базе данных
+        db_dir = "/data" if os.path.exists("/data") else os.path.dirname(os.path.abspath(__file__))
+        db_path = os.path.join(db_dir, 'users.db')
+        backup_dir = os.path.join(db_dir, 'backups')
+        
+        # Проверяем, существуют ли резервные копии
+        if os.path.exists(backup_dir):
+            backup_files = sorted(glob.glob(os.path.join(backup_dir, 'users_backup_*.db')))
+            if backup_files:
+                latest_backup = backup_files[-1]
+                
+                # Копируем последнюю резервную копию в основной файл базы данных
+                shutil.copy2(latest_backup, db_path)
+                logger.info(f"База данных успешно восстановлена из резервной копии: {latest_backup}")
+                return True
+            else:
+                logger.warning("Резервные копии не найдены.")
+        else:
+            logger.warning(f"Директория с резервными копиями не найдена: {backup_dir}")
+        return False
+    except Exception as e:
+        logger.error(f"Ошибка при восстановлении базы данных из резервной копии: {e}")
+        return False
 
 def init_db():
     """Initialize the database with users table."""
@@ -86,6 +157,9 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
+    
+    # Создаем резервную копию после инициализации
+    backup_db()
     logger.info("Database initialized")
 
 # User balance functions
@@ -330,8 +404,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             [InlineKeyboardButton("Lego", callback_data="style_lego")],
             [InlineKeyboardButton("Кукла Блайз", callback_data="style_blythe")],
             [InlineKeyboardButton("Симпсоны", callback_data="style_simpsons")],
-            [InlineKeyboardButton("Советский мульт", callback_data="style_soviet")],
-            [InlineKeyboardButton("Marvel", callback_data="style_marvel")],
+            [InlineKeyboardButton("Игрушка", callback_data="style_toy")],
+            [InlineKeyboardButton("Свой стиль", callback_data="style_custom")],
             [InlineKeyboardButton("Назад", callback_data="back_to_menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -493,8 +567,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "lego": "Lego",
             "blythe": "Кукла Блайз",
             "simpsons": "Симпсоны",
-            "soviet": "Советский мультфильм",
-            "marvel": "Marvel"
+            "toy": "Игрушка",
+            "custom": "Свой стиль"
         }
         
         style_name = style_display_names.get(selected_style, "выбранном стиле")
@@ -518,6 +592,65 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         keyboard.append([InlineKeyboardButton("Выбрать другой стиль", callback_data="generate_image")])
         keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="back_to_menu")])
         
+        # Проверяем, выбран ли стиль "Игрушка"
+        if selected_style == "toy":
+            # Добавляем флаг, что ожидаем ввод аксессуаров
+            context.user_data['user_data']['waiting_for_accessories'] = True
+            
+            # Проверяем, достаточно ли средств у пользователя
+            if balance_sufficient:
+                # Отправляем сообщение с просьбой указать аксессуары
+                await query.edit_message_text(
+                    text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
+                         f"Пожалуйста, укажите аксессуары для вашей игрушки в следующем сообщении.\n"
+                         f"Например: солнцезащитные очки, микрофон, гитара\n\n"
+                         f"{balance_text}",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Отменить", callback_data="generate_image")]
+                    ]),
+                    parse_mode="HTML"
+                )
+            else:
+                # Если недостаточно средств, отправляем стандартное сообщение о недостатке средств
+                await query.edit_message_text(
+                    text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
+                         f"{action_text}\n\n"
+                         f"{balance_text}",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="HTML"
+                )
+            return
+            
+        # Проверяем, выбран ли стиль "Свой стиль"
+        elif selected_style == "custom":
+            # Добавляем флаг, что ожидаем ввод описания стиля
+            context.user_data['user_data']['waiting_for_custom_style'] = True
+            
+            # Проверяем, достаточно ли средств у пользователя
+            if balance_sufficient:
+                # Отправляем сообщение с просьбой описать желаемый стиль
+                await query.edit_message_text(
+                    text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
+                         f"Пожалуйста, опишите желаемый стиль в следующем сообщении.\n"
+                         f"Например: в стиле киберпанк, с неоновыми элементами и дождливым городом на фоне\n\n"
+                         f"{balance_text}",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Отменить", callback_data="generate_image")]
+                    ]),
+                    parse_mode="HTML"
+                )
+            else:
+                # Если недостаточно средств, отправляем стандартное сообщение о недостатке средств
+                await query.edit_message_text(
+                    text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
+                         f"{action_text}\n\n"
+                         f"{balance_text}",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="HTML"
+                )
+            return
+        
+        # Для всех остальных стилей отправляем стандартное сообщение
         # Отправляем новое сообщение с инструкцией и призывом к действию
         await query.edit_message_text(
             text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
@@ -538,8 +671,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             [InlineKeyboardButton("Lego", callback_data="style_lego")],
             [InlineKeyboardButton("Кукла Блайз", callback_data="style_blythe")],
             [InlineKeyboardButton("Симпсоны", callback_data="style_simpsons")],
-            [InlineKeyboardButton("Советский мульт", callback_data="style_soviet")],
-            [InlineKeyboardButton("Marvel", callback_data="style_marvel")],
+            [InlineKeyboardButton("Игрушка", callback_data="style_toy")],
+            [InlineKeyboardButton("Свой стиль", callback_data="style_custom")],
             [InlineKeyboardButton("Назад", callback_data="back_to_menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -670,9 +803,10 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "ghibli": "Ghibli (Аниме)",
         "disney": "Disney",
         "lego": "Lego",
+        "blythe": "Кукла Блайз",
         "simpsons": "Симпсоны",
-        "soviet": "Советский мультфильм",
-        "marvel": "Marvel"
+        "toy": "Игрушка",
+        "custom": "Свой стиль"
     }
     
     style_name = style_display_names.get(selected_style, "выбранном стиле")
@@ -771,22 +905,56 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             Include typical Simpsons background elements.
             Maintain the person's distinguishing features adapted to Simpsons style.
             """
-        elif selected_style == "soviet":
-            prompt = """
-            Transform this person into a Soviet animation character from the 1970s-80s.
-            Use soft, painterly style with muted color palette.
-            Add characteristic round facial features and expressive eyes.
-            Include gentle outlines and watercolor-like textures.
-            Add nostalgic Soviet-era background elements.
+        elif selected_style == "toy":
+            # Проверяем, есть ли аксессуары в данных пользователя
+            accessories = ""
+            user_name = update.effective_user.first_name
+            
+            if 'user_data' in context.user_data:
+                if 'accessories' in context.user_data['user_data']:
+                    accessories = context.user_data['user_data']['accessories']
+                if 'custom_name' in context.user_data['user_data']:
+                    user_name = context.user_data['user_data']['custom_name']
+            
+            prompt = f"""
+            Создай арт: 3D-кукла в стиле Bratz, из soft touch пластика.
+
+            Персонаж - во весь рост, повторяет внешность и аутфит с моего фото. Копируй каждую деталь: прическу, губы, глаза, черты и пропорции лица. 
+            Одежда - точь-в- точь, с акцентом на стиль и текстуры. Кукла лежит в пластиковом углублении, которое повторяет её силуэт. Создай коллекционную экшн-фигурку человека как дорогую игрушку в упаковке. 
+
+            Имя {user_name} - буквы впечатаны и выгравированы на коробке. Аксессуары внутри коробки: Разложены рядом с куклой по своим места в отдельных ячейках
+            аксессуары {accessories if accessories else 'стильные аксессуары и модные предметы'}
             """
-        elif selected_style == "marvel":
-            prompt = """
-            Transform this person into a Marvel Comics character.
-            Use dynamic Marvel comic book illustration style with bold outlines and dramatic shading.
-            Add vibrant comic book colors and contrast.
-            Include heroic pose and composition with comic panel background elements.
-            Maintain the person's distinguishing features adapted to Marvel style.
+        elif selected_style == "custom":
+            # Проверяем, есть ли пользовательское описание стиля
+            custom_style_description = "уникальный стиль"
+            
+            if 'user_data' in context.user_data and 'custom_style' in context.user_data['user_data']:
+                custom_style_description = context.user_data['user_data']['custom_style']
+            
+            prompt = f"""
+            Создай художественное изображение этого человека в следующем стиле:
+            {custom_style_description}
+            
+            Сохрани узнаваемость и ключевые черты человека, но адаптируй их к запрошенному стилю.
             """
+            
+            # Если нет пользовательского описания, отправляем сообщение с просьбой указать стиль
+            if 'user_data' not in context.user_data or 'custom_style' not in context.user_data['user_data']:
+                await context.bot.edit_message_text(
+                    chat_id=update.effective_chat.id,
+                    message_id=status_message.message_id,
+                    text="Пожалуйста, опишите желаемый стиль в текстовом сообщении."
+                )
+                
+                # Сохраняем информацию о том, что пользователь выбрал свой стиль
+                if 'user_data' not in context.user_data:
+                    context.user_data['user_data'] = {}
+                context.user_data['user_data']['waiting_for_custom_style'] = True
+                context.user_data['user_data']['photo_file_path'] = file_path
+                
+                # Выходим из функции, чтобы не генерировать изображение пока
+                return
         elif selected_style == "blythe":
             prompt = """
             Transform this person into a Blythe doll.
@@ -1214,15 +1382,88 @@ def setup_scheduled_tasks(updater):
     
     logger.info("Запланированы регулярные задачи очистки временных файлов")
 
-def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages."""
     # Проверяем, что update и update.message не None
     if update and update.message:
-        # Если пользователь отправил сообщение до использования /start
-        if update.message.text and not update.message.text.startswith('/'):
-            # Получаем user_id для проверки в базе данных
-            user_id = update.effective_user.id
+        # Получаем user_id для проверки в базе данных
+        user_id = update.effective_user.id
+        
+        # Проверяем, ждет ли бот ввода аксессуаров для стиля "Игрушка"
+        if 'user_data' in context.user_data and 'waiting_for_accessories' in context.user_data['user_data'] and context.user_data['user_data']['waiting_for_accessories']:
+            # Сохраняем введенные аксессуары
+            accessories = update.message.text
+            context.user_data['user_data']['accessories'] = accessories
+            context.user_data['user_data']['waiting_for_accessories'] = False
             
+            # Проверяем, есть ли у нас сохраненный путь к фото
+            if 'photo_file_path' in context.user_data['user_data']:
+                file_path = context.user_data['user_data']['photo_file_path']
+                
+                # Отправляем сообщение о начале генерации
+                status_message = await update.message.reply_text(
+                    f"Начинаю создавать игрушку с аксессуарами: {accessories}..."
+                )
+                
+                # Запускаем функцию обработки фото с сохраненными параметрами
+                # Создаем фиктивный объект с фото
+                from unittest.mock import MagicMock
+                photo_message = MagicMock()
+                photo_message.message_id = status_message.message_id
+                photo_message.chat_id = update.effective_chat.id
+                
+                # Запускаем генерацию изображения в стиле "Игрушка"
+                context.user_data['user_data']['selected_style'] = "toy"
+                
+                # Здесь нужно добавить код для генерации изображения
+                # Но поскольку у нас нет прямого доступа к функции process_photo с файлом,
+                # мы можем предложить пользователю отправить фото еще раз
+                await update.message.reply_text(
+                    "Пожалуйста, отправьте фото еще раз, чтобы я мог создать игрушку с указанными аксессуарами."
+                )
+                return
+            
+            # Если нет сохраненного пути к фото, просим отправить фото
+            await update.message.reply_text(
+                "Теперь, пожалуйста, отправьте фотографию, которую хотите превратить в игрушку."
+            )
+            return
+            
+        # Проверяем, ждет ли бот описания для "Своего стиля"
+        elif 'user_data' in context.user_data and 'waiting_for_custom_style' in context.user_data['user_data'] and context.user_data['user_data']['waiting_for_custom_style']:
+            # Сохраняем описание пользовательского стиля
+            custom_style = update.message.text
+            context.user_data['user_data']['custom_style'] = custom_style
+            context.user_data['user_data']['waiting_for_custom_style'] = False
+            
+            # Проверяем, есть ли у нас сохраненный путь к фото
+            if 'photo_file_path' in context.user_data['user_data']:
+                file_path = context.user_data['user_data']['photo_file_path']
+                
+                # Отправляем сообщение о начале генерации
+                status_message = await update.message.reply_text(
+                    f"Начинаю создавать изображение в стиле: {custom_style}..."
+                )
+                
+                # Запускаем генерацию изображения в пользовательском стиле
+                context.user_data['user_data']['selected_style'] = "custom"
+                
+                # Здесь нужно добавить код для генерации изображения
+                # Но поскольку у нас нет прямого доступа к функции process_photo с файлом,
+                # мы можем предложить пользователю отправить фото еще раз
+                await update.message.reply_text(
+                    "Пожалуйста, отправьте фото еще раз, чтобы я мог создать изображение в указанном стиле."
+                )
+                return
+            
+            # Если нет сохраненного пути к фото, просим отправить фото
+            await update.message.reply_text(
+                "Теперь, пожалуйста, отправьте фотографию, которую хотите стилизовать."
+            )
+            return
+
+        # Если пользователь отправил сообщение до использования /start
+        elif update.message.text and not update.message.text.startswith('/'):
             # Проверяем, существует ли пользователь в базе
             conn = get_db_connection()
             cur = conn.cursor()
@@ -1242,12 +1483,13 @@ def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     "3. ...и получите уникальный результат!\n\n"
                     "🔮 Для начала работы введите /start"
                 )
-                update.message.reply_text(bot_description)
+                await update.message.reply_text(bot_description)
                 return
-                
+        
+        # Для всех остальных текстовых сообщений
         logger.info(f"Получено текстовое сообщение от пользователя {update.message.from_user.id}: {update.message.text}")
-        update.message.reply_text(
-            "🖼️ Пожалуйста, отправьте мне фотографию, которую хотите стилизовать!\n\n" \
+        await update.message.reply_text(
+            "💾️ Пожалуйста, отправьте мне фотографию, которую хотите стилизовать!\n\n" \
             "Или воспользуйтесь меню для выбора других опций.",
             reply_markup=create_main_menu()
         )
@@ -1258,7 +1500,23 @@ def main() -> None:
     """Start the bot."""
     print(f"Запуск бота @{BOT_USERNAME}...")
     
-    # Initialize database
+    # Пытаемся восстановить базу данных из резервной копии
+    db_dir = "/data" if os.path.exists("/data") else os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.join(db_dir, 'users.db')
+    
+    # Проверяем, существует ли основная база данных
+    if not os.path.exists(db_path):
+        logger.info("База данных не найдена. Пытаемся восстановить из резервной копии...")
+        if restore_db_from_backup():
+            logger.info("База данных успешно восстановлена из резервной копии!")
+        else:
+            logger.info("Не удалось восстановить базу данных из резервной копии. Создаем новую базу данных.")
+    else:
+        logger.info(f"База данных найдена по пути: {db_path}")
+        # Создаем резервную копию существующей базы данных при запуске
+        backup_db()
+    
+    # Initialize database (создаст таблицы, если они не существуют)
     init_db()
     
     # Test OpenAI connection (but continue anyway)
@@ -1312,12 +1570,21 @@ def main() -> None:
         print("Запуск бота через polling...")
         logger.info("Запуск бота через polling...")
         
-        # Настройка задач очистки временных файлов
+        # Настройка задач очистки временных файлов и резервного копирования
         # Обновленная версия для python-telegram-bot v20.x
         job_queue = application.job_queue
         if job_queue is not None:
+            # Задача очистки временных файлов каждые 30 минут
             job_queue.run_repeating(cleanup_temp_files, interval=30*60, first=10)
             logger.info("Задача очистки временных файлов добавлена в расписание")
+            
+            # Задача резервного копирования базы данных каждые 6 часов
+            async def scheduled_backup(context: ContextTypes.DEFAULT_TYPE):
+                logger.info("Запуск планового резервного копирования базы данных...")
+                backup_db()
+                
+            job_queue.run_repeating(scheduled_backup, interval=6*60*60, first=60*60)
+            logger.info("Задача резервного копирования базы данных добавлена в расписание")
         
         # Выполняем первоначальную очистку временных файлов при запуске
         cleanup_temp_files()
