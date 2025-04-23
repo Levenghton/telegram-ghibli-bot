@@ -6,21 +6,15 @@ import sys
 import sqlite3
 import json
 from datetime import datetime
+import os
 import glob
 import time
 import shutil
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PreCheckoutQueryHandler
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler, PreCheckoutQueryHandler
 from openai import OpenAI
 from openai import OpenAIError
-
-# Загрузка переменных окружения из файла .env при локальном запуске
-try:
-    from dotenv import load_dotenv
-    load_dotenv()  # загрузить переменные окружения из .env файла, если он существует
-    print("Переменные окружения загружены из .env файла")
-except ImportError:
-    print("Модуль dotenv не установлен, переменные окружения будут загружены из системы")
 
 # Создаем директории для временных файлов
 TEMP_DIR = "images/temp"
@@ -32,32 +26,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# API keys - загружаем из переменных окружения
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "ghiblimage_bot")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+# Загрузка переменных окружения
+import os
+from dotenv import load_dotenv
 
-# Детальное логирование для отладки
-print(f"Доступные переменные окружения:")
-print(f"TELEGRAM_TOKEN: {'***' + TELEGRAM_TOKEN[-4:] if TELEGRAM_TOKEN else 'Не установлен'}")
-print(f"BOT_USERNAME: {BOT_USERNAME if BOT_USERNAME else 'Не установлен'}")
-print(f"OPENAI_API_KEY: {'***' + OPENAI_API_KEY[-4:] if OPENAI_API_KEY else 'Не установлен'}")
+# Загружаем переменные окружения из .env файла
+load_dotenv()
 
-# Вывод всех переменных окружения для отладки
-print("Все переменные окружения:")
-for key, value in os.environ.items():
-    if key in ['TELEGRAM_TOKEN', 'OPENAI_API_KEY']:
-        print(f"{key}: ***{value[-4:] if value else 'Не установлен'}")
-    elif 'TOKEN' in key or 'KEY' in key or 'SECRET' in key or 'PASSWORD' in key:
-        print(f"{key}: ***{value[-4:] if value else 'Не установлен'}")
-    else:
-        print(f"{key}: {value}")
+# API keys
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+BOT_USERNAME = os.getenv("BOT_USERNAME")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Проверка наличия необходимых переменных окружения
 if not TELEGRAM_TOKEN or not OPENAI_API_KEY:
-    logger.error("Не указаны обязательные переменные окружения: TELEGRAM_TOKEN и/или OPENAI_API_KEY")
-    print("Ошибка: Необходимо указать TELEGRAM_TOKEN и OPENAI_API_KEY в переменных окружения")
-    sys.exit(1)
+    print("ОШИБКА: Не найдены необходимые переменные окружения TELEGRAM_TOKEN или OPENAI_API_KEY")
+    print("Пожалуйста, убедитесь, что они установлены в файле .env или в переменных окружения системы")
+    
+# Выводим информацию о загруженных переменных
+print("Переменные окружения загружены из .env файла")
+print("Доступные переменные окружения:")
+print(f"TELEGRAM_TOKEN: {'***' + TELEGRAM_TOKEN[-4:] if TELEGRAM_TOKEN else 'Не установлен'}")
+print(f"BOT_USERNAME: {BOT_USERNAME if BOT_USERNAME else 'Не установлен'}")
+print(f"OPENAI_API_KEY: {'***' + OPENAI_API_KEY[-4:] if OPENAI_API_KEY else 'Не установлен'}")
 
 # Constants for balance system
 INITIAL_BALANCE = 25  # Stars
@@ -189,7 +180,7 @@ def create_topup_menu():
     keyboard.append([InlineKeyboardButton("Вернуться", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def start(update: Update, context: CallbackContext) -> None:
     """Send a message when the command /start is issued."""
     user = update.effective_user
     
@@ -215,7 +206,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "<a href='https://telegra.ph/USLOVIYA-ISPOLZOVANIYA-04-05'>Условиями использования</a>"
     )
     
-    await update.message.reply_html(welcome_text, disable_web_page_preview=True)
+    update.message.reply_html(welcome_text, disable_web_page_preview=True)
     
     # Send demo images as a group
     demo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
@@ -243,7 +234,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Send media group
     if media_group:
         try:
-            await context.bot.send_media_group(
+            context.bot.send_media_group(
                 chat_id=update.effective_chat.id, 
                 media=media_group
             )
@@ -253,7 +244,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 "🔮 Отправьте фото для генерации изображения в выбранном стиле.\n\n"
                 "🌟 Приглашайте друзей и получайте 50% от их покупок в виде звёзд."
             )
-            await update.message.reply_text(action_message, reply_markup=create_main_menu())
+            update.message.reply_text(action_message, reply_markup=create_main_menu())
             
         except Exception as e:
             logger.error(f"Error sending demo images: {e}")
@@ -262,7 +253,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 file_path = os.path.join(demo_dir, file_name)
                 try:
                     with open(file_path, 'rb') as photo:
-                        await context.bot.send_photo(
+                        context.bot.send_photo(
                             chat_id=update.effective_chat.id,
                             photo=photo,
                             caption=caption
@@ -270,7 +261,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 except Exception as e:
                     logger.error(f"Error sending individual demo image {file_name}: {e}")
 
-async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def menu_command(update: Update, context: CallbackContext) -> None:
     """Display the main menu."""
     user_id = update.effective_user.id
     balance = get_user_balance(user_id)
@@ -282,7 +273,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         reply_markup=create_main_menu()
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def help_command(update: Update, context: CallbackContext) -> None:
     """Send a message when the command /help is issued."""
     user_id = update.effective_user.id
     balance = get_user_balance(user_id)
@@ -302,7 +293,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         reply_markup=create_main_menu()
     )
 
-async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def balance_command(update: Update, context: CallbackContext) -> None:
     """Show user balance."""
     user_id = update.effective_user.id
     balance = get_user_balance(user_id)
@@ -314,16 +305,16 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
+    update.message.reply_text(
         f"Ваш текущий баланс: ⭐ {balance} звезд\n"
         f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
         reply_markup=reply_markup
     )
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def button_handler(update: Update, context: CallbackContext) -> None:
     """Handle button presses."""
     query = update.callback_query
-    await query.answer()
+    query.answer()
     
     user_id = query.from_user.id
     balance = get_user_balance(user_id)
@@ -345,7 +336,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        query.edit_message_text(
             text="Выберите стиль для вашего изображения:",
             reply_markup=reply_markup
         )
@@ -358,7 +349,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        query.edit_message_text(
             text=f"Ваш текущий баланс: ⭐ {balance} звезд\n"
                 f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
             reply_markup=reply_markup
@@ -371,14 +362,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            await context.bot.send_message(
+            context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=topup_text,
                 reply_markup=create_topup_menu()
             )
         else:
             # Если это обычное сообщение, редактируем его
-            await query.edit_message_text(
+            query.edit_message_text(
                 text=topup_text,
                 reply_markup=create_topup_menu()
             )
@@ -416,7 +407,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             try:
                 # Отправляем счет на оплату
-                await context.bot.send_invoice(
+                context.bot.send_invoice(
                     chat_id=user_id,
                     title=title,
                     description=description,
@@ -432,7 +423,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     start_parameter="pay"  # Добавляем start_parameter для правильной обработки
                 )
                 
-                await query.edit_message_text(
+                query.edit_message_text(
                     text=f"Счет на оплату {stars_amount} звезд создан. Пожалуйста, оплатите его, чтобы пополнить баланс.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
                 )
@@ -441,7 +432,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 logger.info(f"Счет на оплату {stars_amount} звезд успешно создан для пользователя {user_id}")
             except Exception as e:
                 logger.error(f"Ошибка при создании счета: {e}")
-                await query.edit_message_text(
+                query.edit_message_text(
                     text=f"Произошла ошибка при создании счета. Пожалуйста, попробуйте позже.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
                 )
@@ -461,13 +452,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "3. Отправьте ее друзьям"
         )
         
-        await query.edit_message_text(
+        query.edit_message_text(
             text=message,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
         )
         
     elif query.data == "help":
-        await query.edit_message_text(
+        query.edit_message_text(
             text="Как использовать бота:\n\n"
                 "1. Отправьте фотографию или нажмите кнопку 'Сгенерировать изображение'\n"
                 "2. Выберите желаемый стиль (различные варианты доступны)\n"
@@ -528,7 +519,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="back_to_menu")])
         
         # Отправляем новое сообщение с инструкцией и призывом к действию
-        await query.edit_message_text(
+        query.edit_message_text(
             text=f"💫 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                  f"{action_text}\n\n"
                  f"{balance_text}",
@@ -556,14 +547,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            await context.bot.send_message(
+            context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="Выберите стиль для вашего изображения:",
                 reply_markup=reply_markup
             )
         else:
             # Если это обычное сообщение, редактируем его
-            await query.edit_message_text(
+            query.edit_message_text(
                 text="Выберите стиль для вашего изображения:",
                 reply_markup=reply_markup
             )
@@ -576,19 +567,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            await context.bot.send_message(
+            context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=menu_text,
                 reply_markup=create_main_menu()
             )
         else:
             # Если это обычное сообщение, редактируем его
-            await query.edit_message_text(
+            query.edit_message_text(
                 text=menu_text,
                 reply_markup=create_main_menu()
             )
 
-async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def precheckout_callback(update: Update, context: CallbackContext) -> None:
     """Handle the pre-checkout callback."""
     query = update.pre_checkout_query
     
@@ -604,7 +595,7 @@ async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         # Validate the payment
         if user_id and stars:
             # Accept the payment
-            await query.answer(ok=True)
+            query.answer(ok=True)
             logger.info(f"Предварительная проверка платежа одобрена: {stars} звезд для пользователя {user_id}")
         else:
             # Reject the payment
@@ -612,9 +603,9 @@ async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.warning(f"Предварительная проверка платежа отклонена: неверные данные")
     except Exception as e:
         logger.error(f"Ошибка при обработке предварительной проверки платежа: {e}")
-        await query.answer(ok=False, error_message="Произошла ошибка при обработке платежа. Пожалуйста, попробуйте снова.")
+        query.answer(ok=False, error_message="Произошла ошибка при обработке платежа. Пожалуйста, попробуйте снова.")
 
-async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def successful_payment_callback(update: Update, context: CallbackContext) -> None:
     """Handle successful payments."""
     payment = update.message.successful_payment
     
@@ -633,37 +624,36 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
             new_balance = get_user_balance(user_id)
             
             # Send confirmation message
-            await update.message.reply_text(
-                f"✅ Платёж успешно получен! \n\n"
-                f"Добавлено звезд: ⭐ {stars}\n"
+            update.message.reply_text(
+                f"✅ Оплата успешно выполнена!\n\n"
+                f"Добавлено: ⭐ {stars} звезд\n"
                 f"Текущий баланс: ⭐ {new_balance} звезд\n\n"
-                f"Спасибо за поддержку! 🙏",
+                f"Спасибо за поддержку!",
                 reply_markup=create_main_menu()
             )
             
             logger.info(f"Пользователь {user_id} успешно пополнил баланс на {stars} звезд. Новый баланс: {new_balance}")
         else:
-            await update.message.reply_text(
-                f"Привет! Я бот для стилизации фотографий. Отправьте мне фото или воспользуйтесь меню ниже.\n\n"
-                f"Ваш текущий баланс: ⭐ {balance} звезд",
+            update.message.reply_text(
+                "Произошла ошибка при обработке платежа. Пожалуйста, свяжитесь с поддержкой.",
                 reply_markup=create_main_menu()
             )
             logger.warning(f"Ошибка при обработке успешного платежа: отсутствуют данные user_id или stars")
     except Exception as e:
         logger.error(f"Ошибка при обработке успешного платежа: {e}")
-        await update.message.reply_text(
+        update.message.reply_text(
             "Произошла ошибка при обработке платежа. Пожалуйста, свяжитесь с поддержкой.",
             reply_markup=create_main_menu()
         )
 
-async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def process_photo(update: Update, context: CallbackContext) -> None:
     """Process a photo and convert it to the selected style."""
     user_id = update.effective_user.id
     
     # Check if user has sufficient balance
     if not check_balance_sufficient(user_id):
         balance = get_user_balance(user_id)
-        await update.message.reply_text(
+        update.message.reply_text(
             f"У вас недостаточно звезд для генерации изображения.\n"
             f"Ваш текущий баланс: ⭐ {balance} звезд\n"
             f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n"
@@ -687,9 +677,6 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     style_name = style_display_names.get(selected_style, "выбранном стиле")
     
-    # Отправляем сообщение о постановке в очередь генерации
-    sent_message = await update.message.reply_text(f"Ваше фото добавлено в очередь генерации в стиле {style_name}... ⏳")
-    
     # Создаем список разнообразных статусных сообщений
     status_messages = [
         f"Обрабатываю ваше изображение в стиле {style_name}... ⏳",
@@ -703,20 +690,15 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # Выбираем случайное сообщение
     import random
-    # Обновляем сообщение о постановке в очередь
-    status_message = await context.bot.edit_message_text(
-        chat_id=update.effective_chat.id,
-        message_id=sent_message.message_id,
-        text=random.choice(status_messages)
-    )
+    status_message = update.message.reply_text(random.choice(status_messages))
     
     try:
         # Get the photo with the highest resolution
         photo = update.message.photo[-1]
         
         # Download the photo
-        photo_file = await context.bot.get_file(photo.file_id)
-        photo_bytes = await photo_file.download_as_bytearray()
+        photo_file = context.bot.get_file(photo.file_id)
+        photo_bytes = photo_file.download_as_bytearray()
         
         # Используем заранее созданный каталог для временных файлов
         tmp_dir = TEMP_DIR
@@ -741,7 +723,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "Записываю все ваши характерные черты... 📝"
         ]
         
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             chat_id=update.effective_chat.id,
             message_id=status_message.message_id,
             text=random.choice(analysis_messages)
@@ -791,7 +773,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 f"Наношу последние штрихи на изображение в стиле {style_name}... 🎨"
             ]
             
-            await context.bot.edit_message_text(
+            context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=status_message.message_id,
                 text=random.choice(creation_messages)
@@ -908,22 +890,25 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the Ghibli style adaptation.
                 """
             
-            # Используем DALL-E 3 для генерации
+            # Используем новую модель gpt-image-1 для генерации
             image_response = client.images.generate(
-                model="dall-e-3",
+                model="gpt-image-1",
                 prompt=prompt,
                 size="1024x1024",
-                quality="standard",
+                quality="medium",
                 n=1,
             )
             
-            # Получаем URL сгенерированного изображения
-            image_url = image_response.data[0].url
-            try:
-                revised_prompt = image_response.data[0].revised_prompt
-                logger.info(f"Изображение успешно сгенерировано с промптом: {revised_prompt[:100]}...")
-            except:
-                logger.info("Изображение успешно сгенерировано (без доступа к revised_prompt)")
+            # Получаем изображение в формате base64
+            image_base64 = image_response.data[0].b64_json
+            image_bytes = base64.b64decode(image_base64)
+            
+            # Сохраняем изображение во временный файл для отправки
+            generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
+            with open(generated_file_path, "wb") as f:
+                f.write(image_bytes)
+                
+            logger.info(f"Изображение успешно сгенерировано и сохранено в {generated_file_path}")
             
             # Удаляем временный файл изображения, чтобы не занимать дисковое пространство
             try:
@@ -944,17 +929,25 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            # Отправляем изображение пользователю
-            await context.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=image_url,
-                caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
-                reply_markup=reply_markup
-            )
+            # Отправляем изображение пользователю из локального файла
+            with open(generated_file_path, 'rb') as photo_file:
+                context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=photo_file,
+                    caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
+                    reply_markup=reply_markup
+                )
+            
+            # Удаляем сгенерированный файл после отправки
+            try:
+                os.remove(generated_file_path)
+                logger.info(f"Сгенерированный файл {generated_file_path} успешно удален")
+            except Exception as file_error:
+                logger.warning(f"Не удалось удалить сгенерированный файл {generated_file_path}: {file_error}")
             
             # Удаляем статусное сообщение
             try:
-                await context.bot.delete_message(
+                context.bot.delete_message(
                     chat_id=update.effective_chat.id,
                     message_id=status_message.message_id
                 )
@@ -973,45 +966,61 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             
             # Запасной вариант: попробуем DALL-E 2 вариации
             try:
-                await context.bot.edit_message_text(
+                context.bot.edit_message_text(
                     chat_id=update.effective_chat.id,
                     message_id=status_message.message_id,
                     text="Использую альтернативный метод обработки... 🖌️"
                 )
                 
-                # Используем DALL-E 2 для создания вариации
+                # Используем новый API для редактирования изображений
                 with open(file_path, "rb") as img_file:
-                    image_variation = client.images.create_variation(
-                        model="dall-e-2",
+                    image_edit = client.images.edit(
+                        model="gpt-image-1",
                         image=img_file,
-                        n=1,
-                        size="1024x1024"
+                        prompt=f"Create a {selected_style} style portrait of this person with artistic details",
+                        size="1024x1024",
+                        quality="medium"
                     )
                 
-                # Получаем URL вариации изображения
-                variation_url = image_variation.data[0].url
-                logger.info("Вариация изображения успешно создана")
+                # Получаем изображение в формате base64
+                image_base64 = image_edit.data[0].b64_json
+                image_bytes = base64.b64decode(image_base64)
+                
+                # Сохраняем изображение во временный файл для отправки
+                backup_file_path = f"{tmp_dir}/backup_{unique_id}.png"
+                with open(backup_file_path, "wb") as f:
+                    f.write(image_bytes)
+                
+                logger.info("Альтернативное изображение успешно создано")
                 
                 # Deduct stars from user balance
                 update_user_balance(user_id, -GENERATION_COST)
                 current_balance = get_user_balance(user_id)
                 
-                # Отправляем изображение пользователю
-                await context.bot.send_photo(
-                    chat_id=update.effective_chat.id,
-                    photo=variation_url,
-                    caption=f"Ваше изображение (альтернативный метод)! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд"
-                )
+                # Отправляем изображение пользователю из локального файла
+                with open(backup_file_path, 'rb') as photo_file:
+                    context.bot.send_photo(
+                        chat_id=update.effective_chat.id,
+                        photo=photo_file,
+                        caption=f"Ваше изображение (альтернативный метод)! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд"
+                    )
+                
+                # Удаляем временный файл после отправки
+                try:
+                    os.remove(backup_file_path)
+                    logger.info(f"Временный файл {backup_file_path} успешно удален")
+                except Exception as file_error:
+                    logger.warning(f"Не удалось удалить временный файл {backup_file_path}: {file_error}")
                 
                 # Удаляем статусное сообщение
-                await context.bot.delete_message(
+                context.bot.delete_message(
                     chat_id=update.effective_chat.id,
                     message_id=status_message.message_id
                 )
                 
             except Exception as e2:
                 logger.error(f"Ошибка альтернативного метода: {e2}")
-                await context.bot.edit_message_text(
+                context.bot.edit_message_text(
                     chat_id=update.effective_chat.id,
                     message_id=status_message.message_id,
                     text=f"К сожалению, не удалось обработать изображение: {str(e2)}"
@@ -1020,16 +1029,16 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error(f"Общая ошибка: {e}")
         try:
-            await context.bot.edit_message_text(
+            context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=status_message.message_id,
                 text=f"Произошла ошибка при обработке изображения: {str(e)}"
             )
         except:
-            await update.message.reply_text(f"Произошла ошибка при обработке изображения: {str(e)}")
+            update.message.reply_text(f"Произошла ошибка при обработке изображения: {str(e)}")
 
 # Функции управления временными файлами
-def cleanup_temp_files(context: ContextTypes.DEFAULT_TYPE = None):
+def cleanup_temp_files(context: CallbackContext = None):
     """Очистка временных файлов изображений для экономии места на PythonAnywhere."""
     logger.info("Запуск плановой очистки временных файлов...")
     
@@ -1111,7 +1120,22 @@ def emergency_cleanup():
     
     logger.info(f"Экстренная очистка: удалено {deleted_count} файлов")
 
-async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# Функция для настройки регулярных задач
+def setup_scheduled_tasks(updater):
+    """Настройка регулярных задач обслуживания."""
+    job_queue = updater.job_queue
+    
+    # Очистка временных файлов каждые 30 минут
+    job_queue.run_repeating(cleanup_temp_files, interval=30*60, first=10)
+    
+    # Более тщательная очистка раз в день - в 3 часа ночи
+    from datetime import time
+    time_of_day = time(3, 0, 0)  # 3:00 AM
+    job_queue.run_daily(cleanup_temp_files, time=time_of_day)
+    
+    logger.info("Запланированы регулярные задачи очистки временных файлов")
+
+def text_message(update: Update, context: CallbackContext) -> None:
     """Handle text messages."""
     # Проверяем, что update и update.message не None
     if update and update.message:
@@ -1139,11 +1163,11 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     "3. ...и получите уникальный результат!\n\n"
                     "🔮 Для начала работы введите /start"
                 )
-                await update.message.reply_text(bot_description)
+                update.message.reply_text(bot_description)
                 return
                 
         logger.info(f"Получено текстовое сообщение от пользователя {update.message.from_user.id}: {update.message.text}")
-        await update.message.reply_text(
+        update.message.reply_text(
             "🖼️ Пожалуйста, отправьте мне фотографию, которую хотите стилизовать!\n\n" \
             "Или воспользуйтесь меню для выбора других опций.",
             reply_markup=create_main_menu()
@@ -1162,94 +1186,70 @@ def main() -> None:
     test_openai_connection()
     print("Продолжаем запуск бота...")
     
-    # Create the Application with token
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    logger.info(f"Бот инициализирован с токеном: {TELEGRAM_TOKEN[:5]}...")
-
-    # Регистрируем обработчик ошибок
-    async def error_handler(update, context):
-        logger.error(f"Ошибка при обработке обновления: {context.error}")
-        if update:
-            logger.error(f"Обновление, вызвавшее ошибку: {update}")
-            
-    application.add_error_handler(error_handler)
-    
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    logger.info("Зарегистрирован обработчик /start")
-    
-    application.add_handler(CommandHandler("menu", menu_command))
-    logger.info("Зарегистрирован обработчик /menu")
-    
-    application.add_handler(CommandHandler("help", help_command))
-    logger.info("Зарегистрирован обработчик /help")
-    
-    application.add_handler(CommandHandler("balance", balance_command))
-    logger.info("Зарегистрирован обработчик /balance")
-    
-    application.add_handler(CallbackQueryHandler(button_handler))
-    logger.info("Зарегистрирован обработчик для кнопок")
-    
-    application.add_handler(MessageHandler(filters.PHOTO, process_photo))
-    logger.info("Зарегистрирован обработчик для фотографий")
-    
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
-    logger.info("Зарегистрирован обработчик для текстовых сообщений")
-    
-    # Add payment handlers
-    application.add_handler(PreCheckoutQueryHandler(precheckout_callback))
-    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
-    logger.info("Зарегистрированы обработчики для платежей")
-
-    # Очистка временных файлов при запуске
-    logger.info("Запуск плановой очистки временных файлов...")
-    cleanup_temp_files()
-    
-    # Настройка задач очистки временных файлов - полностью отключаем при ошибках
     try:
-        # Проверяем наличие job_queue в зависимостях
-        try:
-            from telegram.ext import JobQueue
-            has_job_queue = True
-        except ImportError:
-            has_job_queue = False
-            logger.warning("Модуль JobQueue не установлен. Установите python-telegram-bot[job-queue]")
-            print("Предупреждение: JobQueue не установлен. Регулярная очистка будет отключена.")
-        
-        # Только если модуль доступен, пытаемся настроить задачи
-        if has_job_queue:
-            job_queue = application.job_queue
-            if job_queue is not None:
-                # Запускаем задачу очистки каждые 30 минут
-                job_queue.run_repeating(cleanup_temp_files, interval=30*60, first=10)
-                logger.info("Запланирована регулярная очистка каждые 30 минут")
+        # Create the Updater with extended timeout settings
+        updater = Updater(TELEGRAM_TOKEN, use_context=True, request_kwargs={'read_timeout': 30, 'connect_timeout': 30})
+        logger.info(f"Бот инициализирован с токеном: {TELEGRAM_TOKEN[:5]}...")
+
+        # Get the dispatcher to register handlers
+        dispatcher = updater.dispatcher
+
+        # Регистрируем обработчик ошибок
+        def error_handler(update, context):
+            logger.error(f"Ошибка при обработке обновления: {context.error}")
+            if update:
+                logger.error(f"Обновление, вызвавшее ошибку: {update}")
                 
-                # Более тщательная очистка раз в день - в 3 часа ночи
-                try:
-                    from datetime import time
-                    time_of_day = time(3, 0, 0)  # 3:00 AM
-                    job_queue.run_daily(cleanup_temp_files, time=time_of_day)
-                    logger.info("Запланирована ежедневная очистка в 3:00 AM")
-                except Exception as e:
-                    logger.warning(f"Не удалось настроить ежедневную очистку: {e}")
-            else:
-                logger.warning("JobQueue объект не доступен. Регулярная очистка отключена.")
-                print("Предупреждение: JobQueue объект не доступен. Регулярная очистка отключена.")
+        dispatcher.add_error_handler(error_handler)
+        
+        # Add handlers
+        dispatcher.add_handler(CommandHandler("start", start))
+        logger.info("Зарегистрирован обработчик /start")
+        
+        dispatcher.add_handler(CommandHandler("menu", menu_command))
+        logger.info("Зарегистрирован обработчик /menu")
+        
+        dispatcher.add_handler(CommandHandler("help", help_command))
+        logger.info("Зарегистрирован обработчик /help")
+        
+        dispatcher.add_handler(CommandHandler("balance", balance_command))
+        logger.info("Зарегистрирован обработчик /balance")
+        
+        dispatcher.add_handler(CallbackQueryHandler(button_handler))
+        logger.info("Зарегистрирован обработчик для кнопок")
+        
+        dispatcher.add_handler(MessageHandler(Filters.photo, process_photo))
+        logger.info("Зарегистрирован обработчик для фотографий")
+        
+        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, text_message))
+        logger.info("Зарегистрирован обработчик для текстовых сообщений")
+        
+        # Add payment handlers
+        dispatcher.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+        dispatcher.add_handler(MessageHandler(Filters.successful_payment, successful_payment_callback))
+        logger.info("Зарегистрированы обработчики для платежей")
+
+        # Start the Bot with more log info
+        print("Запуск бота через start_polling()...")
+        logger.info("Запуск бота через start_polling()...")
+        
+        # Настройка задач очистки временных файлов
+        setup_scheduled_tasks(updater)
+        
+        # Start the Bot
+        updater.start_polling()
+        print("Бот запущен и готов к работе! Нажмите Ctrl+C для остановки.")
+        logger.info("Бот успешно запущен и ждет сообщения!")
+        
+        # Выполняем первоначальную очистку временных файлов при запуске
+        cleanup_temp_files()
+        
+        # Run the bot until you press Ctrl-C or the process receives SIGINT, SIGTERM or SIGABRT
+        updater.idle()
+        
     except Exception as e:
-        # Перехватываем все возможные ошибки, чтобы бот продолжал работать
-        logger.warning(f"Полностью отключена регулярная очистка из-за ошибки: {e}")
-        print(f"Предупреждение: Регулярная очистка отключена из-за ошибки: {e}")
-    
-    # Start the Bot
-    print("Запуск бота через polling...")
-    application.run_polling()
-    print("Бот запущен и готов к работе! Нажмите Ctrl+C для остановки.")
-    logger.info("Бот успешно запущен и ждет сообщения!")
-    
-    # Run the bot until you press Ctrl-C or the process receives SIGINT, SIGTERM or SIGABRT
-    application.run_polling(stop_signals=None)
+        logger.error(f"Критическая ошибка при запуске бота: {e}")
+        print(f"Критическая ошибка при запуске бота: {e}")
 
 if __name__ == '__main__':
-    # Используем более простой способ запуска асинхронной функции
-    from telegram.ext import ApplicationBuilder
     main()
