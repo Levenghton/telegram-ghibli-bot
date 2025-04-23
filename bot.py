@@ -890,14 +890,15 @@ def process_photo(update: Update, context: CallbackContext) -> None:
                 I NEED to test how the tool works with this description. DO NOT completely reimagine or change the person's fundamental appearance beyond the Ghibli style adaptation.
                 """
             
-            # Используем новую модель gpt-image-1 для генерации
-            image_response = client.images.generate(
-                model="gpt-image-1",
-                prompt=prompt,
-                size="1024x1024",
-                quality="medium",
-                n=1,
-            )
+            # Используем метод edit вместо generate для лучших результатов
+            with open(file_path, "rb") as img_file:
+                image_response = client.images.edit(
+                    model="gpt-image-1",
+                    image=img_file,
+                    prompt=prompt,
+                    size="1024x1024",
+                    n=1
+                )
             
             # Получаем изображение в формате base64
             image_base64 = image_response.data[0].b64_json
@@ -979,7 +980,7 @@ def process_photo(update: Update, context: CallbackContext) -> None:
                         image=img_file,
                         prompt=f"Create a {selected_style} style portrait of this person with artistic details",
                         size="1024x1024",
-                        quality="medium"
+                        n=1
                     )
                 
                 # Получаем изображение в формате base64
