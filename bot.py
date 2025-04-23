@@ -294,31 +294,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "<a href='https://telegra.ph/USLOVIYA-ISPOLZOVANIYA-04-05'>Условиями использования</a>"
     )
     
-    # Сначала отправляем текст
+    # Отправляем текст
     await update.message.reply_html(welcome_text, disable_web_page_preview=True)
     
-    # Затем отправляем демонстрационные изображения
+    # Создаем медиа-группу для демонстрационных изображений
     demo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
     
-    # Загружаем и отправляем каждое изображение отдельно для надежности
+    # Создаем медиа-группу с демо-изображениями
+    media_group = []
     demo_files = [
-        ("image ghibli.png", "Стиль Ghibli"),
-        ("disney.png", "Стиль Disney"),
-        ("toy.jpg", "Стиль Игрушка")
+        ("image ghibli.png", "Примеры стилизации фотографий"),
+        ("disney.png", None),
+        ("toy.jpg", None)
     ]
     
-    # Отправляем каждое изображение отдельно с подписью
-    for file_name, caption in demo_files:
+    # Создаем объекты InputMediaPhoto для каждого изображения
+    for i, (file_name, caption) in enumerate(demo_files):
         file_path = os.path.join(demo_dir, file_name)
         try:
             with open(file_path, 'rb') as photo_file:
-                await context.bot.send_photo(
-                    chat_id=update.effective_chat.id,
-                    photo=photo_file,
-                    caption=caption
-                )
+                media_group.append(InputMediaPhoto(
+                    media=photo_file.read(),
+                    caption=caption if i == 0 else None  # Подпись только для первого изображения
+                ))
         except Exception as e:
-            logger.error(f"Error sending demo image {file_name}: {e}")
+            logger.error(f"Error loading demo image {file_name}: {e}")
+    
+    # Отправляем медиа-группу
+    if media_group:
+        try:
+            await context.bot.send_media_group(
+                chat_id=update.effective_chat.id, 
+                media=media_group
+            )
+        except Exception as e:
+            logger.error(f"Error sending media group: {e}")
+            # В случае ошибки при отправке медиа-группы, пробуем отправить одно изображение
+            try:
+                file_path = os.path.join(demo_dir, "image ghibli.png")
+                with open(file_path, 'rb') as photo_file:
+                    await context.bot.send_photo(
+                        chat_id=update.effective_chat.id,
+                        photo=photo_file,
+                        caption="Примеры стилизации фотографий"
+                    )
+            except Exception as e2:
+                logger.error(f"Error sending fallback image: {e2}")
             
             # Отправляем сообщение с призывом к действию и меню после демо изображений
             action_message = (
