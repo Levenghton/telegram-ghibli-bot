@@ -278,7 +278,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Get user balance
     balance = get_user_balance(user.id)
     
-    # Отправляем приветственное сообщение и демонстрационные изображения вместе
+    # Отправляем приветственное сообщение
     welcome_text = (
         f"Привет, {user.mention_html()}! 👋\n\n"
         "✨ Я бот для стилизации фотографий в различных стилях. ✨\n\n"
@@ -294,13 +294,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "<a href='https://telegra.ph/USLOVIYA-ISPOLZOVANIYA-04-05'>Условиями использования</a>"
     )
     
-    # Отправляем текст
     await update.message.reply_html(welcome_text, disable_web_page_preview=True)
     
-    # Создаем медиа-группу для демонстрационных изображений
+    # Send demo images as a group
     demo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
     
-    # Создаем медиа-группу с демо-изображениями
+    # Prepare media group with all demo images
     media_group = []
     demo_files = [
         ("image ghibli.png", "Примеры стилизации фотографий"),
@@ -308,38 +307,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ("toy.jpg", None)
     ]
     
-    # Создаем объекты InputMediaPhoto для каждого изображения
+    # Create InputMediaPhoto objects for each demo image
     for i, (file_name, caption) in enumerate(demo_files):
         file_path = os.path.join(demo_dir, file_name)
         try:
             with open(file_path, 'rb') as photo_file:
                 media_group.append(InputMediaPhoto(
                     media=photo_file.read(),
-                    caption=caption if i == 0 else None  # Подпись только для первого изображения
+                    caption=caption if i == 0 else None  # Caption only for the first image
                 ))
         except Exception as e:
             logger.error(f"Error loading demo image {file_name}: {e}")
     
-    # Отправляем медиа-группу
+    # Send media group
     if media_group:
         try:
             await context.bot.send_media_group(
                 chat_id=update.effective_chat.id, 
                 media=media_group
             )
-        except Exception as e:
-            logger.error(f"Error sending media group: {e}")
-            # В случае ошибки при отправке медиа-группы, пробуем отправить одно изображение
-            try:
-                file_path = os.path.join(demo_dir, "image ghibli.png")
-                with open(file_path, 'rb') as photo_file:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=photo_file,
-                        caption="Примеры стилизации фотографий"
-                    )
-            except Exception as e2:
-                logger.error(f"Error sending fallback image: {e2}")
             
             # Отправляем сообщение с призывом к действию и меню после демо изображений
             action_message = (
@@ -826,23 +812,24 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if 'user_data' in context.user_data and 'selected_style' in context.user_data['user_data']:
         selected_style = context.user_data['user_data']['selected_style']
         
-    # Проверяем, есть ли текст в сообщении с фотографией
+    # Проверяем, есть ли текст, отправленный вместе с фотографией
     caption_text = update.message.caption
-    
-    # Если есть текст и выбран стиль "Свой стиль" или "Игрушка", сохраняем его
-    if caption_text and selected_style in ["custom", "toy"]:
-        if 'user_data' not in context.user_data:
-            context.user_data['user_data'] = {}
-            
-        if selected_style == "custom":
-            # Сохраняем текст как описание пользовательского стиля
-            context.user_data['user_data']['custom_style'] = caption_text
-            logger.info(f"Сохранен пользовательский стиль из подписи к фото: {caption_text}")
-            
-        elif selected_style == "toy":
-            # Сохраняем текст как описание аксессуаров для игрушки
+    if caption_text:
+        logger.info(f"Получена фотография с текстом: {caption_text}")
+        
+        # Если выбран стиль "Игрушка" и есть текст, используем его как описание аксессуаров
+        if selected_style == "toy":
+            if 'user_data' not in context.user_data:
+                context.user_data['user_data'] = {}
             context.user_data['user_data']['accessories'] = caption_text
-            logger.info(f"Сохранены аксессуары для игрушки из подписи к фото: {caption_text}")
+            logger.info(f"Сохранены аксессуары для стиля Игрушка: {caption_text}")
+        
+        # Если выбран стиль "Свой стиль" и есть текст, используем его как описание стиля
+        elif selected_style == "custom":
+            if 'user_data' not in context.user_data:
+                context.user_data['user_data'] = {}
+            context.user_data['user_data']['custom_style'] = caption_text
+            logger.info(f"Сохранено описание для своего стиля: {caption_text}")
     
     # Style display names for messages
     style_display_names = {
