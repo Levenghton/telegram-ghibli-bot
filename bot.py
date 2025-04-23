@@ -12,7 +12,7 @@ import time
 import shutil
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler, PreCheckoutQueryHandler
+from telegram.ext import Updater, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler, PreCheckoutQueryHandler
 from openai import OpenAI
 from openai import OpenAIError
 
@@ -51,7 +51,7 @@ print(f"BOT_USERNAME: {BOT_USERNAME if BOT_USERNAME else 'Не установл�
 print(f"OPENAI_API_KEY: {'***' + OPENAI_API_KEY[-4:] if OPENAI_API_KEY else 'Не установлен'}")
 
 # Constants for balance system
-INITIAL_BALANCE = 25  # Stars
+INITIAL_BALANCE = 5  # Stars
 GENERATION_COST = 25  # Stars per generation
 
 # Constants for Telegram Stars payments
@@ -1219,15 +1219,15 @@ def main() -> None:
         dispatcher.add_handler(CallbackQueryHandler(button_handler))
         logger.info("Зарегистрирован обработчик для кнопок")
         
-        dispatcher.add_handler(MessageHandler(Filters.photo, process_photo))
+        dispatcher.add_handler(MessageHandler(filters.PHOTO, process_photo))
         logger.info("Зарегистрирован обработчик для фотографий")
         
-        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, text_message))
+        dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
         logger.info("Зарегистрирован обработчик для текстовых сообщений")
         
         # Add payment handlers
         dispatcher.add_handler(PreCheckoutQueryHandler(precheckout_callback))
-        dispatcher.add_handler(MessageHandler(Filters.successful_payment, successful_payment_callback))
+        dispatcher.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
         logger.info("Зарегистрированы обработчики для платежей")
 
         # Start the Bot with more log info
