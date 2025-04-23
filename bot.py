@@ -646,7 +646,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                          f"Пожалуйста, опишите желаемый стиль в следующем сообщении.\n"
-                         f"Например: в стиле киберпанк, с неоновыми элементами и дождливым городом на фоне\n\n"
+                         f"Например: В стиле персонажа SIMS с зеленым ромбом над головой!\n\n"
                          f"{balance_text}",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("Отменить", callback_data="generate_image")]
