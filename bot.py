@@ -559,20 +559,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         bot_username = BOT_USERNAME
         invite_link = f"https://t.me/{bot_username}?start={user_id}"
         
-        # Generate message with affiliate link instructions
-        message = (
-            "🎉 Приглашайте друзей и получайте бонусы! 🎉\n\n"
-            "Пригласив друга, вы получите 50% от всех звездочек, которые он потратит в боте.\n\n"
-            "Как это работает:\n"
-            "1. Зайдите в шапку бота @" + bot_username + "\n"
-            "2. Скопируйте вашу партнерскую ссылку\n"
-            "3. Отправьте ее друзьям"
-        )
-        
-        await query.edit_message_text(
-            text=message,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
-        )
+        try:
+            # Generate message with affiliate link instructions
+            message = (
+                "🎉 Приглашайте друзей и получайте бонусы! 🎉\n\n"
+                "Пригласив друга, вы получите 50% от всех звездочек, которые он потратит в боте.\n\n"
+                "Как это работает:\n"
+                "Зайдите в шапку бота @" + bot_username
+            )
+            
+            # Отправляем новое сообщение вместо редактирования существующего
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=message,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
+            )
+            
+            # Отвечаем на callback, чтобы убрать загрузку
+            await query.answer()
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке кнопки 'invite_friend': {e}")
+            
+            # Отправляем сообщение об ошибке
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="Произошла ошибка при обработке кнопки. Пожалуйста, попробуйте еще раз.",
+                reply_markup=create_main_menu()
+            )
         
     elif query.data == "help":
         await query.edit_message_text(
