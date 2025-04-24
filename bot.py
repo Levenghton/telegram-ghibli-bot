@@ -1638,7 +1638,17 @@ def main() -> None:
         543868861: 50,  # @otikhonovv
         158655078: 50,  # @og_bojack
         898119392: 50,  # @as_kuts
-        387308410: 50   # @sersmoker
+        387308410: 50,  # @sersmoker
+        599056102: 50,  # @MACCAHA6OP
+        799121786: 50,  # @glammmarie
+        1282447632: 50, # @tandemmm
+        540767224: 50,  # @katyaberezina
+        749679952: 50,  # @yooitsmayaa
+        361175621: 50,  # @aka_sonicx
+        1620127013: 50, # @staceysold01
+        458091123: 50,  # @annunreal
+        538164889: 50,  # @maishroom
+        1044302256: 50  # @helvipera
     }
     
     # Проверяем, не было ли уже пополнения
