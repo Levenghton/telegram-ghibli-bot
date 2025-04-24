@@ -56,6 +56,7 @@ GENERATION_COST = 25  # Stars per generation
 
 # Constants for Telegram Stars payments
 STARS_PACKAGES = [
+    {"stars": 25, "price": 25, "label": "1 фото"},
     {"stars": 50, "price": 50, "label": "2 фото"},
     {"stars": 100, "price": 100, "label": "4 фото"},
     {"stars": 250, "price": 250, "label": "10 фото"},
