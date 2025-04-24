@@ -1609,6 +1609,79 @@ def main() -> None:
     # Initialize database (создаст таблицы, если они не существуют)
     init_db()
     
+    # Пополнение баланса для указанных пользователей
+    special_users = {
+        425011094: 50,  # @Dashenidze
+        332287980: 50,  # @martipup
+        700584712: 50,  # @TurovAA8
+        620533552: 50,  # @SergeyBkv
+        393170770: 50,  # @Lux4zz
+        310746560: 50,  # @kgetmanskiy
+        5035196965: 50, # @EkaterinaVishnevskaya16
+        484004440: 50,  # @PodlesnykhVladislav
+        403839081: 50,  # @Ruslan_N111
+        1009220399: 50, # @p_kvas
+        707625065: 50,  # @applemosha
+        341404316: 50,  # @TuryGilyano
+        285856369: 50,  # @surfto
+        409198378: 50,  # @kasatkinal
+        94449195: 50,   # @nemalakhov
+        432348273: 50,  # @amyakish
+        444021208: 50,  # @Stmonkey
+        422564694: 50,  # @thejmn
+        208229698: 50,  # @AntonMF
+        785125921: 50,  # @immarianna
+        781795574: 50,  # @Yuriycel
+        1386289871: 50, # @alkuchinsky
+        757883669: 50,  # @mntsrd
+        752580951: 50,  # @moria_vohus
+        543868861: 50,  # @otikhonovv
+        158655078: 50,  # @og_bojack
+        898119392: 50,  # @as_kuts
+        387308410: 50   # @sersmoker
+    }
+    
+    # Проверяем, не было ли уже пополнения
+    bonus_flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bonus_applied.flag')
+    if not os.path.exists(bonus_flag_path):
+        logger.info("Применяем бонусные звезды для указанных пользователей...")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Получаем список всех пользователей
+        cursor.execute('SELECT user_id FROM users')
+        all_users = [row[0] for row in cursor.fetchall()]
+        
+        # Пополняем баланс указанным пользователям
+        for user_id, amount in special_users.items():
+            # Проверяем, существует ли пользователь в базе
+            if user_id in all_users:
+                update_user_balance(user_id, amount)
+                logger.info(f"Пополнен баланс пользователя {user_id} на {amount} звезд")
+            else:
+                # Если пользователя нет в базе, создаем его запись
+                cursor.execute(
+                    'INSERT INTO users (user_id, username, first_name, balance, total_generations, created_at, last_generation) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (user_id, "", "", amount, 0, datetime.now(), datetime.now())
+                )
+                logger.info(f"Создан новый пользователь {user_id} с балансом {amount} звезд")
+        
+        # Пополняем баланс всем остальным пользователям на 5 звезд
+        for user_id in all_users:
+            if user_id not in special_users:
+                update_user_balance(user_id, 5)
+                logger.info(f"Пополнен баланс пользователя {user_id} на 5 звезд")
+        
+        conn.commit()
+        conn.close()
+        
+        # Создаем флаг, что бонус уже применен
+        with open(bonus_flag_path, 'w') as f:
+            f.write(f"Bonus applied at {datetime.now()}")
+        logger.info("Бонусные звезды успешно применены!")
+    else:
+        logger.info("Бонусные звезды уже были применены ранее.")
+    
     # Test OpenAI connection (but continue anyway)
     test_openai_connection()
     print("Продолжаем запуск бота...")
