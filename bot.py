@@ -11,6 +11,7 @@ import glob
 import time
 import shutil
 from datetime import datetime
+from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PreCheckoutQueryHandler
 from openai import OpenAI
@@ -229,6 +230,51 @@ if not os.path.exists("images"):
     os.makedirs("images")
     logger.info("Создана директория для изображений")
 
+# Функция периодического обновления статуса во время генерации изображения
+async def update_status_periodically(bot, chat_id, message_id, interval=10):
+    """Update status message periodically to show progress."""
+    dots = 0
+    status_texts = [
+        "Генерирую изображение... Это может занять до минуты.",
+        "Преобразую ваше фото... Пожалуйста, подождите.",
+        "Искусственный интеллект работает над вашим изображением...",
+        "Добавляю финальные штрихи к вашему изображению...",
+        "Почти готово... Еще немного."
+    ]
+    status_index = 0
+    
+    try:
+        while True:
+            # Обновляем текст с точками
+            dots = (dots + 1) % 4
+            dot_string = "." * dots
+            
+            # Меняем текст каждые 30 секунд
+            if dots == 0:
+                status_index = (status_index + 1) % len(status_texts)
+            
+            status_text = f"{status_texts[status_index]}{dot_string}"
+            
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=status_text
+                )
+            except Exception as e:
+                # Игнорируем ошибку "message is not modified"
+                if "message is not modified" not in str(e).lower():
+                    print(f"Ошибка при обновлении статуса: {e}")
+            
+            # Ждем интервал перед следующим обновлением
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        # Задача была отменена, это нормально
+        pass
+    except Exception as e:
+        print(f"Неожиданная ошибка в update_status_periodically: {e}")
+
+# Функция для проверки соединения с OpenAI API
 def test_openai_connection():
     """Test connection to OpenAI API."""
     try:
@@ -1192,14 +1238,31 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 """
             
             # Используем метод edit вместо generate для лучших результатов
+            # Создаем копию файла в памяти, чтобы можно было закрыть файл
             with open(file_path, "rb") as img_file:
-                image_response = client.images.edit(
+                img_bytes = img_file.read()
+            
+            # Отправляем периодические обновления статуса, чтобы пользователь знал, что бот работает
+            status_update_task = asyncio.create_task(
+                update_status_periodically(context.bot, update.effective_chat.id, status_message.message_id)
+            )
+            
+            # Запускаем запрос к OpenAI API в отдельном потоке
+            from functools import partial
+            loop = asyncio.get_event_loop()
+            image_response = await loop.run_in_executor(
+                None,
+                partial(client.images.edit,
                     model="gpt-image-1",
-                    image=img_file,
+                    image=BytesIO(img_bytes),
                     prompt=prompt,
                     size="1024x1536",
                     n=1
                 )
+            )
+            
+            # Останавливаем задачу обновления статуса
+            status_update_task.cancel()
             
             # Получаем изображение в формате base64
             image_base64 = image_response.data[0].b64_json
