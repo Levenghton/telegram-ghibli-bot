@@ -260,10 +260,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     
     # Create or update user in database
-    create_user(user.id, user.username, user.first_name, user.last_name)
+    await create_user(user.id, user.username, user.first_name, user.last_name)
     
     # Get user balance
-    balance = get_user_balance(user.id)
+    balance = await get_user_balance(user.id)
     
     # Отправляем приветственное сообщение
     welcome_text = (
