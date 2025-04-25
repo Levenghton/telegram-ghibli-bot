@@ -242,6 +242,41 @@ async def async_openai_edit_image(image_data, prompt):
             except Exception as file_error:
                 logger.warning(f"Не удалось удалить временный файл: {file_error}")
 
+# Функция для периодического обновления статуса генерации изображения
+async def update_status_periodically(bot, chat_id, message_id, interval=5):
+    """Периодически обновляет статусное сообщение во время генерации."""
+    status_emojis = ["⏱", "⏲", "⏳", "⌛"]
+    status_texts = [
+        "Генерирую изображение... Это может занять несколько секунд.",
+        "Искусственный интеллект творит изображение...",
+        "Добавляю штрихи в стиле... Почти готово!",
+        "Завершаю работу над изображением..."
+    ]
+    
+    # Бесконечный цикл обновления, пока задача не будет отменена
+    i = 0
+    try:
+        while True:
+            status_emoji = status_emojis[i % len(status_emojis)]
+            status_text = status_texts[i % len(status_texts)]
+            
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"{status_emoji} {status_text}"
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось обновить статус: {e}")
+            
+            i += 1
+            await asyncio.sleep(interval)  # Обновляем статус каждые N секунд
+    except asyncio.CancelledError:
+        # Задача была отменена, выходим из цикла
+        pass
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка в update_status_periodically: {e}")
+
 # Функция для проверки соединения с OpenAI API
 def test_openai_connection():
     """Test connection to OpenAI API."""
