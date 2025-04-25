@@ -1048,14 +1048,30 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 # Создаем новый экземпляр клиента OpenAI для потока
                 thread_client = OpenAI(api_key=OPENAI_API_KEY)
                 
-                # Вызываем API без загрузки файла с диска
-                return thread_client.images.edit(
-                    model="gpt-image-1",
-                    image=io.BytesIO(image_data),
-                    prompt=prompt,
-                    size="1024x1536",
-                    n=1
-                )
+                # Вызываем API, но сохраняем изображение во временный файл с указанием расширения
+                # Создаем временный файл .jpg для корректного определения MIME-типа
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+                    temp_path = temp_file.name
+                    temp_file.write(image_data)
+                
+                # Открываем файл для API с указанием имени файла
+                with open(temp_path, 'rb') as image_file:
+                    response = thread_client.images.edit(
+                        model="gpt-image-1",
+                        image=image_file,  # Используем файловый объект вместо BytesIO
+                        prompt=prompt,
+                        size="1024x1536",
+                        n=1
+                    )
+                
+                # Удаляем временный файл
+                try:
+                    os.remove(temp_path)
+                except Exception as e:
+                    logger.warning(f"Не удалось удалить временный файл: {e}")
+                
+                return response
             except Exception as e:
                 logger.error(f"Ошибка при генерации изображения в потоке: {e}")
                 raise
@@ -1086,12 +1102,18 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     text=f"Ошибка при генерации изображения. Попробуйте еще раз или выберите другой стиль."
                 )
                 
-                # Возвращаем баланс пользователю, если генерация не удалась
-                try:
-                    await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
-                    logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за ошибки генерации")
-                except Exception as refund_error:
-                    logger.error(f"Ошибка при возврате баланса: {refund_error}")
+                # Проверяем, было ли списание звезд, чтобы избежать двойного начисления
+                # Используем тег, сохраненный в user_data
+                is_balance_charged = context.user_data.get('was_charged', False)
+                if is_balance_charged:
+                    try:
+                        # Возвращаем баланс ТОЛЬКО если он был списан
+                        await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
+                        logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за ошибки генерации")
+                        # Сбрасываем флаг списания
+                        context.user_data['was_charged'] = False
+                    except Exception as refund_error:
+                        logger.error(f"Ошибка при возврате баланса: {refund_error}")
                 
                 return  # Выходим из функции в случае ошибки
         
@@ -1116,6 +1138,11 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Deduct stars from user balance
         await update_user_balance(user_id, -GENERATION_COST)
         current_balance = await get_user_balance(user_id)
+        
+        # Устанавливаем флаг, что баланс был списан - это поможет избежать двойного возврата при ошибке
+        if 'user_data' not in context.user_data:
+            context.user_data['user_data'] = {}
+        context.user_data['was_charged'] = True
         
         # Создаем кнопки для добавления после генерации - строго 3 кнопки
         keyboard = [
