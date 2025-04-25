@@ -179,13 +179,14 @@ async def async_openai_edit_image(image_data, prompt):
     import base64
     
     # Сохраняем изображение во временный файл с расширением .jpg для правильного MIME типа
-    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
-        temp_path = temp_file.name
-        temp_file.write(image_data)
-    
-    # Асинхронно отправляем запрос к OpenAI API
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        try:
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+            temp_path = temp_file.name
+            temp_file.write(image_data)
+        
+        # Асинхронно отправляем запрос к OpenAI API
+        async with httpx.AsyncClient(timeout=90.0) as client:
             # Подготавливаем файлы и параметры запроса
             with open(temp_path, 'rb') as f:
                 files = {
@@ -220,28 +221,26 @@ async def async_openai_edit_image(image_data, prompt):
                 # Удаляем временный файл
                 try:
                     await async_remove_file(temp_path)
+                    temp_path = None  # Сбрасываем путь после удаления
                 except Exception as e:
                     logger.warning(f"Не удалось удалить временный файл: {e}")
                     
                 return image_bytes
-{{ ... }}
-            
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=f"{status_emoji} {status_text}"
-                )
-            except Exception as e:
-                logger.warning(f"Не удалось обновить статус: {e}")
-            
-            i += 1
-            await asyncio.sleep(3)  # Обновляем статус каждые 3 секунды
-    except asyncio.CancelledError:
-        # Задача была отменена, выходим из цикла
-        pass
+                
+        # Обработка ошибок API        
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Ошибка HTTP при обращении к OpenAI API: {e.response.text}")
+        raise Exception(f"Ошибка OpenAI API: {e.response.text}")
     except Exception as e:
-        print(f"Неожиданная ошибка в update_status_periodically: {e}")
+        logger.error(f"Ошибка при генерации изображения: {e}")
+        raise
+    finally:
+        # Всегда удаляем временный файл если он еще существует
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception as file_error:
+                logger.warning(f"Не удалось удалить временный файл: {file_error}")
 
 # Функция для проверки соединения с OpenAI API
 def test_openai_connection():
