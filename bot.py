@@ -474,23 +474,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
         
     elif query.data == "topup_balance":
-        # Display star packages menu
-        topup_text = "Выберите количество звезд для покупки:"
-        
-        # Проверяем, является ли сообщение фотографией
-        if is_photo_message:
-            # Если это фото, отправляем новое сообщение
+        try:
+            # Отвечаем на callback сразу, чтобы убрать индикатор загрузки
+            await query.answer()
+            
+            # Display star packages menu
+            topup_text = "Выберите количество звезд для покупки:"
+            
+            # Используем только один метод - отправку нового сообщения
+            # Это поможет избежать ошибок с редактированием сообщений
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=topup_text,
                 reply_markup=create_topup_menu()
             )
-        else:
-            # Если это обычное сообщение, редактируем его
-            await query.edit_message_text(
-                text=topup_text,
-                reply_markup=create_topup_menu()
-            )
+            
+            # Пытаемся удалить старое сообщение, но игнорируем ошибки
+            try:
+                await context.bot.delete_message(
+                    chat_id=query.message.chat_id,
+                    message_id=query.message.message_id
+                )
+            except Exception as e:
+                # Игнорируем ошибки удаления
+                logger.info(f"Не удалось удалить сообщение при покупке звезд: {e}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при обработке кнопки 'topup_balance': {e}")
+            # Отправляем сообщение об ошибке
+            try:
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="Произошла ошибка при покупке звезд. Пожалуйста, попробуйте снова или введите /menu",
+                    reply_markup=create_main_menu()
+                )
+            except:
+                pass
     
     elif query.data.startswith("buy_stars_"):
         stars_amount = int(query.data.split("_")[2])
@@ -734,24 +753,50 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
     
     elif query.data == "back_to_menu":
-        menu_text = f"Главное меню\n\n"\
-                  f"Ваш текущий баланс: ⭐ {balance} звезд\n"\
-                  f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n"
-        
-        # Проверяем, является ли сообщение фотографией
-        if is_photo_message:
-            # Если это фото, отправляем новое сообщение
+        try:
+            # Отвечаем на callback сразу, чтобы убрать индикатор загрузки
+            await query.answer()
+            
+            # Get user balance
+            user_id = update.effective_user.id
+            balance = get_user_balance(user_id)
+            
+            # Check if the message contains a photo
+            is_photo_message = query.message.photo is not None if query.message else False
+            
+            menu_text = f"Главное меню\n\n"\
+                      f"Ваш текущий баланс: ⭐ {balance} звезд\n"\
+                      f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n"
+            
+            # Используем только один метод - отправку нового сообщения
+            # Это поможет избежать ошибок с редактированием сообщений
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=menu_text,
                 reply_markup=create_main_menu()
             )
-        else:
-            # Если это обычное сообщение, редактируем его
-            await query.edit_message_text(
-                text=menu_text,
-                reply_markup=create_main_menu()
-            )
+            
+            # Пытаемся удалить старое сообщение, но игнорируем ошибки
+            try:
+                await context.bot.delete_message(
+                    chat_id=query.message.chat_id,
+                    message_id=query.message.message_id
+                )
+            except Exception as e:
+                # Игнорируем ошибки удаления
+                logger.info(f"Не удалось удалить сообщение: {e}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при обработке кнопки 'back_to_menu': {e}")
+            # Отправляем сообщение об ошибке
+            try:
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="Произошла ошибка при возврате в меню. Пожалуйста, попробуйте снова или введите /menu",
+                    reply_markup=create_main_menu()
+                )
+            except:
+                pass
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the pre-checkout callback."""
@@ -1043,36 +1088,115 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             """
         
         # Используем метод edit вместо generate для лучших результатов
-        with open(file_path, "rb") as img_file:
-            image_response = client.images.edit(
-                model="gpt-image-1",
-                image=img_file,
-                prompt=prompt,
-                size="1024x1536",
-                n=1
-            )
-        
-        # Получаем изображение в формате base64
-        image_base64 = image_response.data[0].b64_json
-        image_bytes = base64.b64decode(image_base64)
-        
-        # Сохраняем изображение во временный файл для отправки
-        generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
-        with open(generated_file_path, "wb") as f:
-            f.write(image_bytes)
-            
-        logger.info(f"Изображение успешно сгенерировано и сохранено в {generated_file_path}")
-        
-        # Удаляем временный файл изображения, чтобы не занимать дисковое пространство
         try:
-            os.remove(file_path)
-            logger.info(f"Временный файл {file_path} успешно удален")
-        except Exception as file_error:
-            logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
-        
-        # Deduct stars from user balance
-        update_user_balance(user_id, -GENERATION_COST)
-        current_balance = get_user_balance(user_id)
+            # Добавляем таймаут для запроса к OpenAI
+            import asyncio
+            from openai import AsyncOpenAI
+            
+            # Создаем асинхронный клиент с таймаутом
+            async_client = AsyncOpenAI(
+                api_key=OPENAI_API_KEY,
+                timeout=60.0  # Устанавливаем таймаут 60 секунд
+            )
+            
+            # Обновляем статусное сообщение каждые 10 секунд
+            update_task = asyncio.create_task(update_status_message(context, status_message, update))
+            
+            with open(file_path, "rb") as img_file:
+                # Запускаем запрос с таймаутом
+                try:
+                    image_response = await asyncio.wait_for(
+                        async_client.images.edit(
+                            model="gpt-image-1",
+                            image=img_file,
+                            prompt=prompt,
+                            size="1024x1536",
+                            n=1
+                        ),
+                        timeout=120  # Максимальное время ожидания - 2 минуты
+                    )
+                except asyncio.TimeoutError:
+                    # Если превышен таймаут, сообщаем пользователю
+                    try:
+                        update_task.cancel()  # Отменяем задачу обновления статуса
+                    except Exception as e:
+                        logger.error(f"Ошибка при отмене задачи обновления статуса: {e}")
+                    
+                    await context.bot.edit_message_text(
+                        chat_id=update.effective_chat.id,
+                        message_id=status_message.message_id,
+                        text="Генерация изображения заняла слишком много времени. Пожалуйста, попробуйте еще раз."
+                    )
+                    # Возвращаем звезды пользователю
+                    update_user_balance(user_id, GENERATION_COST)  # Добавляем звезды обратно
+                    return None, None
+            
+            # Отменяем задачу обновления статуса
+            try:
+                update_task.cancel()
+            except Exception as e:
+                logger.error(f"Ошибка при отмене задачи обновления статуса: {e}")
+            
+            # Получаем изображение в формате base64
+            image_base64 = image_response.data[0].b64_json
+            image_bytes = base64.b64decode(image_base64)
+            
+            # Сохраняем изображение во временный файл для отправки
+            generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
+            with open(generated_file_path, "wb") as f:
+                f.write(image_bytes)
+                
+            logger.info(f"Изображение успешно сгенерировано и сохранено в {generated_file_path}")
+            
+            # Удаляем временный файл изображения, чтобы не занимать дисковое пространство
+            try:
+                os.remove(file_path)
+                logger.info(f"Временный файл {file_path} успешно удален")
+            except Exception as file_error:
+                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
+            
+            # Deduct stars from user balance
+            update_user_balance(user_id, -GENERATION_COST)
+            current_balance = get_user_balance(user_id)
+            
+            return generated_file_path, current_balance
+            
+        except Exception as e:
+            logger.error(f"Ошибка при генерации изображения: {e}")
+            
+            # Пытаемся отменить задачу обновления статуса, если она была создана
+            try:
+                if 'update_task' in locals():
+                    update_task.cancel()
+            except Exception as cancel_error:
+                logger.error(f"Ошибка при отмене задачи обновления статуса: {cancel_error}")
+            
+            # Сообщаем пользователю об ошибке
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=update.effective_chat.id,
+                    message_id=status_message.message_id,
+                    text=f"Произошла ошибка при генерации изображения. Пожалуйста, попробуйте еще раз."
+                )
+            except Exception as message_error:
+                logger.error(f"Ошибка при отправке сообщения об ошибке: {message_error}")
+                # Пытаемся отправить новое сообщение
+                try:
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=f"Произошла ошибка при генерации изображения. Пожалуйста, попробуйте еще раз."
+                    )
+                except:
+                    pass
+            
+            # Возвращаем звезды пользователю
+            try:
+                update_user_balance(user_id, GENERATION_COST)  # Добавляем звезды обратно
+                logger.info(f"Звезды возвращены пользователю {user_id} из-за ошибки генерации")
+            except Exception as balance_error:
+                logger.error(f"Ошибка при возврате звезд: {balance_error}")
+            
+            return None, None
         
         # Создаем кнопки для добавления после генерации - строго 3 кнопки
         keyboard = [
@@ -1435,6 +1559,33 @@ def emergency_cleanup():
                         logger.warning(f"Не удалось удалить {file_path}: {e}")
     
     logger.info(f"Экстренная очистка: удалено {deleted_count} файлов")
+
+# Функция для обновления статусного сообщения во время генерации изображения
+async def update_status_message(context, status_message, update):
+    """Периодически обновляет статусное сообщение, чтобы пользователь знал, что процесс идет"""
+    import asyncio
+    status_texts = [
+        "⏳ Генерация изображения... Это может занять до 2 минут",
+        "⏳ Генерация изображения... Пожалуйста, подождите",
+        "⏳ Генерация изображения... Создаем шедевр",
+        "⏳ Генерация изображения... Почти готово"
+    ]
+    
+    i = 0
+    try:
+        while True:
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=status_message.message_id,
+                text=status_texts[i % len(status_texts)]
+            )
+            i += 1
+            await asyncio.sleep(10)  # Обновляем каждые 10 секунд
+    except asyncio.CancelledError:
+        # Задача была отменена, это нормально
+        pass
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении статусного сообщения: {e}")
 
 # Функция для настройки регулярных задач
 def setup_scheduled_tasks(updater):
