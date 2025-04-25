@@ -14,13 +14,28 @@ load_dotenv()
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
-# Получаем параметры подключения к PostgreSQL из переменных окружения
-PG_HOST = os.getenv('PG_HOST', 'localhost')
-PG_PORT = os.getenv('PG_PORT', '5432')
-PG_DB = os.getenv('PG_DB', 'telegram_bot')
-PG_USER = os.getenv('PG_USER', 'postgres')
-PG_PASSWORD = os.getenv('PG_PASSWORD', 'postgres')
-PG_CONNECTION_STRING = f"postgresql://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DB}"
+# Получаем строку подключения к PostgreSQL из переменных окружения
+# Приоритет: DATABASE_URL, затем отдельные переменные
+DATABASE_URL = os.getenv('DATABASE_URL')
+DATABASE_PUBLIC_URL = os.getenv('DATABASE_PUBLIC_URL')
+
+# Если есть DATABASE_URL, используем его
+if DATABASE_URL:
+    PG_CONNECTION_STRING = DATABASE_URL
+    logger.info("Используем DATABASE_URL для подключения к PostgreSQL")
+# Если есть DATABASE_PUBLIC_URL, используем его
+elif DATABASE_PUBLIC_URL:
+    PG_CONNECTION_STRING = DATABASE_PUBLIC_URL
+    logger.info("Используем DATABASE_PUBLIC_URL для подключения к PostgreSQL")
+# Иначе формируем из отдельных параметров
+else:
+    PG_HOST = os.getenv('PG_HOST', 'localhost')
+    PG_PORT = os.getenv('PG_PORT', '5432')
+    PG_DB = os.getenv('PG_DB', 'railway')
+    PG_USER = os.getenv('PG_USER', 'postgres')
+    PG_PASSWORD = os.getenv('PG_PASSWORD', 'postgres')
+    PG_CONNECTION_STRING = f"postgresql://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DB}"
+    logger.info("Используем отдельные параметры для подключения к PostgreSQL")
 
 # Глобальный пул соединений
 _pool = None
