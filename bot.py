@@ -75,6 +75,58 @@ def get_db_connection():
     conn = sqlite3.connect(db_path)
     return conn
 
+# Асинхронные обертки для блокирующих функций
+async def async_get_user_balance(user_id):
+    """Async wrapper for get_user_balance."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, get_user_balance, user_id)
+
+async def async_check_balance_sufficient(user_id):
+    """Async wrapper for check_balance_sufficient."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, check_balance_sufficient, user_id)
+
+async def async_update_user_balance(user_id, amount):
+    """Async wrapper for update_user_balance."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, update_user_balance, user_id, amount)
+
+async def async_save_file(file_path, content):
+    """Async wrapper for file saving."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, lambda: save_file_sync(file_path, content))
+    
+def save_file_sync(file_path, content):
+    """Synchronous file saving function."""
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+async def async_read_file(file_path):
+    """Async wrapper for file reading."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: read_file_sync(file_path))
+    
+def read_file_sync(file_path):
+    """Synchronous file reading function."""
+    with open(file_path, "rb") as f:
+        return f.read()
+
+async def async_decode_base64(base64_string):
+    """Async wrapper for base64 decoding."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: base64.b64decode(base64_string))
+
+async def async_remove_file(file_path):
+    """Async wrapper for file removal."""
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, lambda: os.remove(file_path))
+        logger.info(f"Файл {file_path} успешно удален")
+        return True
+    except Exception as e:
+        logger.warning(f"Не удалось удалить файл {file_path}: {e}")
+        return False
+
 def backup_db():
     """Create a backup of the database."""
     try:
@@ -870,12 +922,14 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Process a photo and convert it to the selected style."""
     user_id = update.effective_user.id
     
-    # Check if user has sufficient balance
-    if not check_balance_sufficient(user_id):
-        balance = get_user_balance(user_id)
+    # Асинхронная проверка баланса
+    is_balance_sufficient = await async_check_balance_sufficient(user_id)
+    
+    if not is_balance_sufficient:
+        balance = await async_get_user_balance(user_id)
         await update.message.reply_text(
             f"У вас недостаточно звезд для генерации изображения.\n"
-            f"Ваш текущий баланс: ⭐ {balance} звезд\n"
+            f"Текущий баланс: ⭐ {balance} звезд\n"
             f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n"
         )
         return
@@ -949,9 +1003,8 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         unique_id = f"{update.effective_user.id}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{str(uuid.uuid4())[:8]}"
         file_path = f"{tmp_dir}/{unique_id}.png"
         
-        # Save photo to a temporary file
-        with open(file_path, "wb") as f:
-            f.write(photo_bytes)
+        # Асинхронно сохраняем фото во временный файл
+        await async_save_file(file_path, photo_bytes)
         
         logger.info(f"Обработка изображения для пользователя {update.effective_user.id} в стиле {style_name}")
         # Создаем список разнообразных сообщений для фазы создания
@@ -1238,9 +1291,8 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 """
             
             # Используем метод edit вместо generate для лучших результатов
-            # Создаем копию файла в памяти, чтобы можно было закрыть файл
-            with open(file_path, "rb") as img_file:
-                img_bytes = img_file.read()
+            # Асинхронно читаем файл в память
+            img_bytes = await async_read_file(file_path)
             
             # Отправляем периодические обновления статуса, чтобы пользователь знал, что бот работает
             status_update_task = asyncio.create_task(
@@ -1266,25 +1318,21 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             
             # Получаем изображение в формате base64
             image_base64 = image_response.data[0].b64_json
-            image_bytes = base64.b64decode(image_base64)
+            # Асинхронно декодируем base64
+            image_bytes = await async_decode_base64(image_base64)
             
-            # Сохраняем изображение во временный файл для отправки
+            # Сохраняем изображение во временный файл для отправки - асинхронно
             generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
-            with open(generated_file_path, "wb") as f:
-                f.write(image_bytes)
+            await async_save_file(generated_file_path, image_bytes)
                 
             logger.info(f"Изображение успешно сгенерировано и сохранено в {generated_file_path}")
             
-            # Удаляем временный файл изображения, чтобы не занимать дисковое пространство
-            try:
-                os.remove(file_path)
-                logger.info(f"Временный файл {file_path} успешно удален")
-            except Exception as file_error:
-                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
+            # Асинхронно удаляем временный файл изображения
+            await async_remove_file(file_path)
             
-            # Deduct stars from user balance
-            update_user_balance(user_id, -GENERATION_COST)
-            current_balance = get_user_balance(user_id)
+            # Асинхронно обновляем баланс пользователя
+            await async_update_user_balance(user_id, -GENERATION_COST)
+            current_balance = await async_get_user_balance(user_id)
             
             # Создаем кнопки для добавления после генерации - строго 3 кнопки
             keyboard = [
@@ -1295,20 +1343,19 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             # Отправляем изображение пользователю из локального файла
-            with open(generated_file_path, 'rb') as photo_file:
-                await context.bot.send_photo(
-                    chat_id=update.effective_chat.id,
-                    photo=photo_file,
-                    caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
-                    reply_markup=reply_markup
-                )
+            # Асинхронно читаем файл для отправки
+            image_content = await async_read_file(generated_file_path)
             
-            # Удаляем сгенерированный файл после отправки
-            try:
-                os.remove(generated_file_path)
-                logger.info(f"Сгенерированный файл {generated_file_path} успешно удален")
-            except Exception as file_error:
-                logger.warning(f"Не удалось удалить сгенерированный файл {generated_file_path}: {file_error}")
+            # Отправляем фото
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=BytesIO(image_content),
+                caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
+                reply_markup=reply_markup
+            )
+            
+            # Асинхронно удаляем сгенерированный файл после отправки
+            await async_remove_file(generated_file_path)
             
             # Удаляем статусное сообщение
             try:
@@ -1338,44 +1385,49 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 )
                 
                 # Используем новый API для редактирования изображений
-                with open(file_path, "rb") as img_file:
-                    image_edit = client.images.edit(
+                # Асинхронно читаем файл
+                img_bytes = await async_read_file(file_path)
+                
+                # Запускаем запрос к OpenAI API в отдельном потоке
+                from functools import partial
+                loop = asyncio.get_event_loop()
+                image_edit = await loop.run_in_executor(
+                    None,
+                    partial(client.images.edit,
                         model="gpt-image-1",
-                        image=img_file,
+                        image=BytesIO(img_bytes),
                         prompt=f"Create a {selected_style} style portrait of this person with artistic details",
                         size="1024x1536",
                         n=1
                     )
+                )
                 
                 # Получаем изображение в формате base64
                 image_base64 = image_edit.data[0].b64_json
-                image_bytes = base64.b64decode(image_base64)
+                image_bytes = await async_decode_base64(image_base64)
                 
-                # Сохраняем изображение во временный файл для отправки
+                # Сохраняем изображение во временный файл для отправки - асинхронно
                 backup_file_path = f"{tmp_dir}/backup_{unique_id}.png"
-                with open(backup_file_path, "wb") as f:
-                    f.write(image_bytes)
+                await async_save_file(backup_file_path, image_bytes)
                 
                 logger.info("Альтернативное изображение успешно создано")
                 
-                # Deduct stars from user balance
-                update_user_balance(user_id, -GENERATION_COST)
-                current_balance = get_user_balance(user_id)
+                # Асинхронно обновляем баланс пользователя
+                await async_update_user_balance(user_id, -GENERATION_COST)
+                current_balance = await async_get_user_balance(user_id)
                 
-                # Отправляем изображение пользователю из локального файла
-                with open(backup_file_path, 'rb') as photo_file:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=photo_file,
-                        caption=f"Ваше изображение (альтернативный метод)! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд"
-                    )
+                # Асинхронно читаем файл для отправки
+                photo_content = await async_read_file(backup_file_path)
                 
-                # Удаляем временный файл после отправки
-                try:
-                    os.remove(backup_file_path)
-                    logger.info(f"Временный файл {backup_file_path} успешно удален")
-                except Exception as file_error:
-                    logger.warning(f"Не удалось удалить временный файл {backup_file_path}: {file_error}")
+                # Отправляем изображение пользователю
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=BytesIO(photo_content),
+                    caption=f"Ваше изображение (альтернативный метод)! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд"
+                )
+                
+                # Асинхронно удаляем временный файл после отправки
+                await async_remove_file(backup_file_path)
                 
                 # Удаляем статусное сообщение
                 await context.bot.delete_message(
