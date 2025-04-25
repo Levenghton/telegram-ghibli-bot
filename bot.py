@@ -85,6 +85,11 @@ async def async_save_file(file_path, content):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, lambda: save_file_sync(file_path, content))
     
+async def async_remove_file(file_path):
+    """Async wrapper for file removal."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, lambda: os.remove(file_path) if os.path.exists(file_path) else None)
+    
 def save_file_sync(file_path, content):
     """Synchronous file saving function."""
     with open(file_path, "wb") as f:
@@ -165,51 +170,75 @@ def restore_db_from_backup():
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Create images directory if it doesn't exist
-if not os.path.exists("images"):
-    os.makedirs("images")
-    logger.info("Создана директория для изображений")
-
-# Функция периодического обновления статуса во время генерации изображения
-async def update_status_periodically(bot, chat_id, message_id, interval=10):
-    """Update status message periodically to show progress."""
-    dots = 0
-    status_texts = [
-        "Генерирую изображение... Это может занять до минуты.",
-        "Преобразую ваше фото... Пожалуйста, подождите.",
-        "Искусственный интеллект работает над вашим изображением...",
-        "Добавляю финальные штрихи к вашему изображению...",
-        "Почти готово... Еще немного."
-    ]
-    status_index = 0
+# Асинхронная функция для работы с OpenAI API
+async def async_openai_edit_image(image_data, prompt):
+    """Асинхронная функция для прямого вызова OpenAI Images API через httpx."""
+    import httpx
+    import tempfile
+    import json
+    import base64
     
-    try:
-        while True:
-            # Обновляем текст с точками
-            dots = (dots + 1) % 4
-            dot_string = "." * dots
-            
-            # Меняем текст каждые 30 секунд
-            if dots == 0:
-                status_index = (status_index + 1) % len(status_texts)
-            
-            status_text = f"{status_texts[status_index]}{dot_string}"
+    # Сохраняем изображение во временный файл с расширением .jpg для правильного MIME типа
+    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+        temp_path = temp_file.name
+        temp_file.write(image_data)
+    
+    # Асинхронно отправляем запрос к OpenAI API
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        try:
+            # Подготавливаем файлы и параметры запроса
+            with open(temp_path, 'rb') as f:
+                files = {
+                    'image': ("image.jpg", f, 'image/jpeg'),
+                    'prompt': (None, prompt),
+                    'model': (None, "gpt-image-1"),
+                    'size': (None, "1024x1536"),
+                    'n': (None, "1"),
+                }
+                
+                # Асинхронно выполняем запрос к API
+                headers = {
+                    'Authorization': f'Bearer {OPENAI_API_KEY}'
+                }
+                
+                response = await client.post(
+                    "https://api.openai.com/v1/images/edits",
+                    headers=headers,
+                    files=files
+                )
+                
+                # Проверяем статус ответа
+                response.raise_for_status()
+                
+                # Парсим ответ
+                result = response.json()
+                
+                # Извлекаем данные изображения
+                image_base64 = result['data'][0]['b64_json']
+                image_bytes = base64.b64decode(image_base64)
+                
+                # Удаляем временный файл
+                try:
+                    await async_remove_file(temp_path)
+                except Exception as e:
+                    logger.warning(f"Не удалось удалить временный файл: {e}")
+                    
+                return image_bytes
+{{ ... }}
             
             try:
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text=status_text
+                    text=f"{status_emoji} {status_text}"
                 )
             except Exception as e:
-                # Игнорируем ошибку "message is not modified"
-                if "message is not modified" not in str(e).lower():
-                    print(f"Ошибка при обновлении статуса: {e}")
+                logger.warning(f"Не удалось обновить статус: {e}")
             
-            # Ждем интервал перед следующим обновлением
-            await asyncio.sleep(interval)
+            i += 1
+            await asyncio.sleep(3)  # Обновляем статус каждые 3 секунды
     except asyncio.CancelledError:
-        # Задача была отменена, это нормально
+        # Задача была отменена, выходим из цикла
         pass
     except Exception as e:
         print(f"Неожиданная ошибка в update_status_periodically: {e}")
@@ -1034,97 +1063,85 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             update_status_periodically(context.bot, update.effective_chat.id, status_message.message_id)
         )
         
-        # Используем метод edit в отдельном потоке, чтобы не блокировать бота
-        # Подготовим файл изображения для передачи в OpenAI API
+        # Подготовим файл изображения для передачи в OpenAI API - асинхронно
         with open(file_path, "rb") as img_file:
             image_data = img_file.read()
-        
-        # Запускаем запрос к OpenAI API в отдельном потоке
-        from concurrent.futures import ThreadPoolExecutor
-        
-        # Функция для запуска в отдельном потоке
-        def generate_image_thread(image_data, prompt):
-            try:
-                # Создаем новый экземпляр клиента OpenAI для потока
-                thread_client = OpenAI(api_key=OPENAI_API_KEY)
-                
-                # Вызываем API, но сохраняем изображение во временный файл с указанием расширения
-                # Создаем временный файл .jpg для корректного определения MIME-типа
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
-                    temp_path = temp_file.name
-                    temp_file.write(image_data)
-                
-                # Открываем файл для API с указанием имени файла
-                with open(temp_path, 'rb') as image_file:
-                    response = thread_client.images.edit(
-                        model="gpt-image-1",
-                        image=image_file,  # Используем файловый объект вместо BytesIO
-                        prompt=prompt,
-                        size="1024x1536",
-                        n=1
-                    )
-                
-                # Удаляем временный файл
-                try:
-                    os.remove(temp_path)
-                except Exception as e:
-                    logger.warning(f"Не удалось удалить временный файл: {e}")
-                
-                return response
-            except Exception as e:
-                logger.error(f"Ошибка при генерации изображения в потоке: {e}")
-                raise
-        
-        # Запускаем в пуле потоков
-        with ThreadPoolExecutor() as executor:
-            # Запускаем задачу в пуле потоков
-            future = executor.submit(generate_image_thread, image_data, prompt)
             
+        # Теперь используем полностью асинхронную функцию для вызова OpenAI API
+        try:
+            # Вызываем асинхронную функцию с таймаутом
+            output_image_data = await asyncio.wait_for(
+                async_openai_edit_image(image_data, prompt), 
+                timeout=90  # Увеличиваем таймаут до 90 секунд
+            )
+        except asyncio.TimeoutError:
+            # Отменяем задачу обновления статуса
+            status_update_task.cancel()
+            
+            # Сообщаем пользователю о таймауте
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=status_message.message_id,
+                text="\u26a0️ Генерация изображения заняла слишком много времени. Пожалуйста, попробуйте еще раз."
+            )
+            
+            # Проверяем, было ли списание звезд
+            if context.user_data.get('was_charged', False):
+                # Возвращаем баланс пользователю
+                await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
+                logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за таймаута")
+                # Сбрасываем флаг списания
+                context.user_data['was_charged'] = False
+                
+            # Удаляем временный файл
             try:
-                # Ждем завершения с таймаутом
-                image_response = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: future.result(timeout=90)  # 90 секунд максимум
-                )
+                os.remove(file_path)
+                logger.info(f"Временный файл {file_path} удален после таймаута")
+            except Exception as file_error:
+                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
                 
-                # Останавливаем обновления статуса
-                status_update_task.cancel()
-            except Exception as e:
-                # В случае ошибки сообщаем пользователю
-                status_update_task.cancel()  # Останавливаем обновления статуса
-                
-                logger.error(f"Ошибка при генерации изображения: {e}")
-                
-                # Сообщаем пользователю об ошибке
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=status_message.message_id,
-                    text=f"Ошибка при генерации изображения. Попробуйте еще раз или выберите другой стиль."
-                )
-                
-                # Проверяем, было ли списание звезд, чтобы избежать двойного начисления
-                # Используем тег, сохраненный в user_data
-                is_balance_charged = context.user_data.get('was_charged', False)
-                if is_balance_charged:
-                    try:
-                        # Возвращаем баланс ТОЛЬКО если он был списан
-                        await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
-                        logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за ошибки генерации")
-                        # Сбрасываем флаг списания
-                        context.user_data['was_charged'] = False
-                    except Exception as refund_error:
-                        logger.error(f"Ошибка при возврате баланса: {refund_error}")
-                
-                return  # Выходим из функции в случае ошибки
+            return  # Выходим из функции в случае таймаута
+        except Exception as e:
+            # Отменяем задачу обновления статуса
+            status_update_task.cancel()
+            
+            # Сообщаем пользователю об ошибке
+            logger.error(f"Ошибка при генерации изображения: {e}")
+            
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=status_message.message_id,
+                text=f"Ошибка при генерации изображения. Попробуйте еще раз или выберите другой стиль."
+            )
+            
+            # Проверяем, было ли списание звезд
+            if context.user_data.get('was_charged', False):
+                try:
+                    # Возвращаем баланс ТОЛЬКО если он был списан
+                    await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
+                    logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за ошибки генерации")
+                    # Сбрасываем флаг списания
+                    context.user_data['was_charged'] = False
+                except Exception as refund_error:
+                    logger.error(f"Ошибка при возврате баланса: {refund_error}")
+            
+            # Удаляем временный файл
+            try:
+                os.remove(file_path)
+                logger.info(f"Временный файл {file_path} удален после ошибки")
+            except Exception as file_error:
+                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
+            
+            return  # Выходим из функции в случае ошибки
         
-        # Получаем изображение в формате base64
-        image_base64 = image_response.data[0].b64_json
-        image_bytes = base64.b64decode(image_base64)
+        # Отменяем обновление статуса, т.к. изображение успешно сгенерировано
+        status_update_task.cancel()
         
         # Сохраняем изображение во временный файл для отправки
+        # output_image_data уже содержит декодированные байты изображения
         generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
         with open(generated_file_path, "wb") as f:
-            f.write(image_bytes)
+            f.write(output_image_data)
             
         logger.info(f"Изображение успешно сгенерировано и сохранено в {generated_file_path}")
         
