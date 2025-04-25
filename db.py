@@ -40,8 +40,15 @@ async def get_pool():
     global _pool
     if _pool is None:
         try:
-            _pool = await asyncpg.create_pool(PG_CONNECTION_STRING, min_size=2, max_size=10)
-            logger.info(f"Создан пул соединений с базой данных PostgreSQL")
+            # Устанавливаем меньший min_size для экономии ресурсов и более быстрый max_idle_timeout
+            _pool = await asyncpg.create_pool(
+                PG_CONNECTION_STRING, 
+                min_size=1,       # Экономим ресурсы при низкой нагрузке
+                max_size=10,      # Масштабируемся при необходимости
+                command_timeout=10,  # Ограничиваем время выполнения запросов
+                max_inactive_connection_lifetime=30  # Быстрее закрываем неактивные соединения
+            )
+            logger.info(f"Создан оптимизированный пул соединений с базой данных PostgreSQL")
         except Exception as e:
             logger.error(f"Ошибка при создании пула соединений с PostgreSQL: {e}")
             raise
@@ -111,10 +118,10 @@ async def create_user(user_id, username=None, first_name=None, last_name=None):
                 logger.info(f"Обновлены данные пользователя: {user_id}")
                 return False  # Пользователь не был создан, просто обновлен
             else:
-                # Создаем нового пользователя с начальным балансом 10 звезд
+                # Создаем нового пользователя с нулевым балансом
                 await conn.execute('''
                     INSERT INTO users (user_id, username, first_name, last_name, balance)
-                    VALUES ($1, $2, $3, $4, 10)
+                    VALUES ($1, $2, $3, $4, 0)
                 ''', user_id, username or "", first_name or "", last_name or "")
                 logger.info(f"Создан новый пользователь: {user_id}")
                 return True  # Пользователь был создан

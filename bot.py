@@ -1588,6 +1588,17 @@ async def main() -> None:
     """Start the bot."""
     print(f"Запуск бота @{BOT_USERNAME}...")
     
+    # Проверка на дубликаты экземпляров бота
+    try:
+        import requests
+        bot_info = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo", timeout=5).json()
+        if bot_info.get('result', {}).get('url'):
+            logger.warning("Обнаружен запущенный webhook. Возможно, бот уже запущен в другом месте.")
+            print("ВНИМАНИЕ: Обнаружен запущенный webhook. Возможно, бот уже запущен в другом месте.")
+            # Бот с webhook может работать параллельно с polling, поэтому просто выводим предупреждение
+    except Exception as e:
+        logger.warning(f"Не удалось проверить информацию о webhook: {e}")
+    
     # Инициализируем PostgreSQL базу данных
     try:
         logger.info("Инициализация PostgreSQL базы данных...")
@@ -1603,46 +1614,9 @@ async def main() -> None:
         print(f"Ошибка при инициализации базы данных: {e}")
         return
     
-    # Пополнение баланса для указанных пользователей
+    # Пополнение баланса только для одного пользователя
     special_users = {
-        425011094: 50,  # @Dashenidze
-        332287980: 50,  # @martipup
-        700584712: 50,  # @TurovAA8
-        620533552: 50,  # @SergeyBkv
-        393170770: 50,  # @Lux4zz
-        310746560: 50,  # @kgetmanskiy
-        5035196965: 50, # @EkaterinaVishnevskaya16
-        484004440: 50,  # @PodlesnykhVladislav
-        403839081: 50,  # @Ruslan_N111
-        1009220399: 50, # @p_kvas
-        707625065: 50,  # @applemosha
-        341404316: 50,  # @TuryGilyano
-        285856369: 50,  # @surfto
-        409198378: 50,  # @kasatkinal
-        94449195: 50,   # @nemalakhov
-        432348273: 50,  # @amyakish
-        444021208: 50,  # @Stmonkey
-        422564694: 50,  # @thejmn
-        208229698: 50,  # @AntonMF
-        785125921: 50,  # @immarianna
-        781795574: 50,  # @Yuriycel
-        1386289871: 50, # @alkuchinsky
-        757883669: 50,  # @mntsrd
-        752580951: 50,  # @moria_vohus
-        543868861: 50,  # @otikhonovv
-        158655078: 50,  # @og_bojack
-        898119392: 50,  # @as_kuts
-        387308410: 50,  # @sersmoker
-        599056102: 50,  # @MACCAHA6OP
-        799121786: 50,  # @glammmarie
-        1282447632: 50, # @tandemmm
-        540767224: 50,  # @katyaberezina
-        749679952: 50,  # @yooitsmayaa
-        361175621: 50,  # @aka_sonicx
-        1620127013: 50, # @staceysold01
-        458091123: 50,  # @annunreal
-        538164889: 50,  # @maishroom
-        1044302256: 50  # @helvipera
+        425011094: 50,  # @Dashenidze - Только один пользователь получает бонусные звезды
     }
     
     # Проверяем, не было ли уже пополнения
@@ -1787,6 +1761,49 @@ async def main() -> None:
         logger.error(f"Критическая ошибка при запуске бота: {e}")
         print(f"Критическая ошибка при запуске бота: {e}")
 
+# Функция для проверки наличия других экземпляров бота
+async def check_for_duplicate_bots():
+    """Check if there are other bot instances already running."""
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            # Проверяем getMe - если бот уже работает, ответ должен быть быстрым
+            response = await client.post(f"https://api.telegram.org/bot{TOKEN}/getUpdates", 
+                                         json={"offset": -1, "limit": 1, "timeout": 1})
+            if response.status_code == 409:  # Conflict - значит, есть другой экземпляр
+                logger.error("Обнаружен другой запущенный экземпляр бота! Этот экземпляр будет остановлен.")
+                print("ВНИМАНИЕ: Обнаружен другой запущенный экземпляр бота! Этот экземпляр будет остановлен.")
+                return True
+                
+            # Дополнительная проверка - есть ли webhook
+            webhook_response = await client.post(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo")
+            if webhook_response.status_code == 200:
+                webhook_info = webhook_response.json()
+                if webhook_info.get('result', {}).get('url'):
+                    logger.warning("Обнаружен запущенный webhook. Возможно, бот уже запущен с использованием webhook.")
+                    print("ВНИМАНИЕ: Обнаружен запущенный webhook. Для предотвращения конфликтов удалите webhook.")
+    except Exception as e:
+        logger.warning(f"Не удалось проверить наличие других ботов: {e}")
+    return False
+
+# Основная стартовая функция
+async def run_bot():
+    """Run the bot with duplicate instances check."""
+    # Проверяем, есть ли уже работающие экземпляры бота
+    duplicate_exists = await check_for_duplicate_bots()
+    if duplicate_exists:
+        print("Завершение работы текущего экземпляра, так как обнаружен другой работающий экземпляр бота.")
+        await close_pool()  # Закрываем соединения с базой данных
+        return
+    
+    try:
+        # Запускаем бота
+        await main()
+    finally:
+        # Закрываем соединения с базой данных при завершении
+        await close_pool()
+        print("Соединения с базой данных закрыты.")
+
 if __name__ == '__main__':
-    # Запускаем асинхронную функцию main() в цикле событий asyncio
-    asyncio.run(main())
+    # Запускаем бота с проверкой наличия дубликатов
+    asyncio.run(run_bot())
