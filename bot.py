@@ -1029,15 +1029,71 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             Include some Ghibli-style environment elements that complement the character.
             """
         
-        # Используем метод edit вместо generate для лучших результатов
+        # Начинаем периодические обновления статуса, чтобы пользователь знал, что процесс идет
+        status_update_task = asyncio.create_task(
+            update_status_periodically(context.bot, update.effective_chat.id, status_message.message_id)
+        )
+        
+        # Используем метод edit в отдельном потоке, чтобы не блокировать бота
+        # Подготовим файл изображения для передачи в OpenAI API
         with open(file_path, "rb") as img_file:
-            image_response = client.images.edit(
-                model="gpt-image-1",
-                image=img_file,
-                prompt=prompt,
-                size="1024x1536",
-                n=1
-            )
+            image_data = img_file.read()
+        
+        # Запускаем запрос к OpenAI API в отдельном потоке
+        from concurrent.futures import ThreadPoolExecutor
+        
+        # Функция для запуска в отдельном потоке
+        def generate_image_thread(image_data, prompt):
+            try:
+                # Создаем новый экземпляр клиента OpenAI для потока
+                thread_client = OpenAI(api_key=OPENAI_API_KEY)
+                
+                # Вызываем API без загрузки файла с диска
+                return thread_client.images.edit(
+                    model="gpt-image-1",
+                    image=io.BytesIO(image_data),
+                    prompt=prompt,
+                    size="1024x1536",
+                    n=1
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при генерации изображения в потоке: {e}")
+                raise
+        
+        # Запускаем в пуле потоков
+        with ThreadPoolExecutor() as executor:
+            # Запускаем задачу в пуле потоков
+            future = executor.submit(generate_image_thread, image_data, prompt)
+            
+            try:
+                # Ждем завершения с таймаутом
+                image_response = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: future.result(timeout=90)  # 90 секунд максимум
+                )
+                
+                # Останавливаем обновления статуса
+                status_update_task.cancel()
+            except Exception as e:
+                # В случае ошибки сообщаем пользователю
+                status_update_task.cancel()  # Останавливаем обновления статуса
+                
+                logger.error(f"Ошибка при генерации изображения: {e}")
+                
+                # Сообщаем пользователю об ошибке
+                await context.bot.edit_message_text(
+                    chat_id=update.effective_chat.id,
+                    message_id=status_message.message_id,
+                    text=f"Ошибка при генерации изображения. Попробуйте еще раз или выберите другой стиль."
+                )
+                
+                # Возвращаем баланс пользователю, если генерация не удалась
+                try:
+                    await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
+                    logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за ошибки генерации")
+                except Exception as refund_error:
+                    logger.error(f"Ошибка при возврате баланса: {refund_error}")
+                
+                return  # Выходим из функции в случае ошибки
         
         # Получаем изображение в формате base64
         image_base64 = image_response.data[0].b64_json
@@ -1067,11 +1123,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             [InlineKeyboardButton("Купить звезды", callback_data="topup_balance")],
             [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
         ]
-        try:
-            reply_markup = InlineKeyboardMarkup(keyboard)
-        except Exception as e:
-            logger.error(f"Ошибка при создании клавиатуры: {e}")
-            reply_markup = None
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
         # Отправляем изображение пользователю из локального файла
         with open(generated_file_path, 'rb') as photo_file:
@@ -1592,32 +1644,6 @@ async def main() -> None:
     """Start the bot."""
     print(f"Запуск бота @{BOT_USERNAME}...")
     
-    # Принудительно удаляем вебхук, если он установлен
-    try:
-        import requests
-        # Проверяем, есть ли вебхук
-        bot_info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getWebhookInfo", timeout=5).json()
-        webhook_url = bot_info.get('result', {}).get('url')
-        
-        if webhook_url:
-            logger.warning(f"Обнаружен запущенный webhook: {webhook_url}. Удаляем...")
-            print(f"ВНИМАНИЕ: Обнаружен запущенный webhook: {webhook_url}. Удаляем...")
-            
-            # Удаляем webhook
-            delete_result = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=5).json()
-            if delete_result.get('ok'):
-                logger.info("Вебхук успешно удален")
-                print("Вебхук успешно удален")
-            else:
-                logger.error(f"Ошибка при удалении вебхука: {delete_result}")
-                print(f"Ошибка при удалении вебхука: {delete_result}")
-            
-            # Ждем немного, чтобы Telegram обработал запрос
-            import time
-            time.sleep(3)
-    except Exception as e:
-        logger.warning(f"Не удалось проверить/удалить webhook: {e}")
-    
     # Проверка на дубликаты экземпляров бота
     try:
         import requests
@@ -1690,16 +1716,8 @@ async def main() -> None:
         # Create the Application with extended timeout settings
         from telegram.ext import ApplicationBuilder
         
-        # Создаем приложение с расширенными настройками таймаута и экспоненциальным ожиданием
-        application = ApplicationBuilder().token(TELEGRAM_TOKEN)\
-            .read_timeout(30)\
-            .connect_timeout(30)\
-            .get_updates_read_timeout(30)\
-            .get_updates_connect_timeout(30)\
-            .connection_pool_size(16)\
-            .pool_timeout(30)\
-            .concurrent_updates(True)\
-            .build()
+        # Создаем приложение с расширенными настройками таймаута
+        application = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).connect_timeout(30).build()
         logger.info(f"Бот инициализирован с токеном: {TELEGRAM_TOKEN[:5]}...")
 
         # Регистрируем обработчик ошибок
@@ -1823,57 +1841,21 @@ async def check_for_duplicate_bots():
 
 # Основная стартовая функция
 async def run_bot():
-    """Run the bot with duplicate instances check and resilient error handling."""
-    # Создаем замок-файл для предотвращения запуска дубликатов
-    import os
-    lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bot.lock')
-    
-    if os.path.exists(lock_file):
-        with open(lock_file, 'r') as f:
-            try:
-                import time, psutil
-                pid = int(f.read().strip())
-                if psutil.pid_exists(pid):
-                    print(f"Обнаружен файл блокировки с активным процессом (PID: {pid}). Возможно, бот уже запущен.")
-                    logger.warning(f"Обнаружен файл блокировки с активным процессом (PID: {pid}).")
-                    await close_pool()
-                    return
-            except (ValueError, ImportError):
-                pass
-    
-    # Записываем текущий PID в файл блокировки
-    import os
-    with open(lock_file, 'w') as f:
-        f.write(str(os.getpid()))
-    
+    """Run the bot with duplicate instances check."""
     # Проверяем, есть ли уже работающие экземпляры бота
     duplicate_exists = await check_for_duplicate_bots()
     if duplicate_exists:
         print("Завершение работы текущего экземпляра, так как обнаружен другой работающий экземпляр бота.")
         await close_pool()  # Закрываем соединения с базой данных
-        try:
-            os.remove(lock_file)  # Удаляем файл блокировки
-        except:
-            pass
         return
     
     try:
-        # Запускаем бота с обработкой ошибок
+        # Запускаем бота
         await main()
-    except Exception as e:
-        logger.error(f"Критическая ошибка при работе бота: {e}")
-        print(f"Критическая ошибка при работе бота: {e}")
     finally:
         # Закрываем соединения с базой данных при завершении
         await close_pool()
         print("Соединения с базой данных закрыты.")
-        
-        # Удаляем файл блокировки при завершении
-        try:
-            os.remove(lock_file)
-            print(f"Файл блокировки удален: {lock_file}")
-        except Exception as e:
-            print(f"Не удалось удалить файл блокировки: {e}")
 
 if __name__ == '__main__':
     # Запускаем бота с проверкой наличия дубликатов
