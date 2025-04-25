@@ -50,6 +50,9 @@ print(f"TELEGRAM_TOKEN: {'***' + TELEGRAM_TOKEN[-4:] if TELEGRAM_TOKEN else 'Н�
 print(f"BOT_USERNAME: {BOT_USERNAME if BOT_USERNAME else 'Не установлен'}")
 print(f"OPENAI_API_KEY: {'***' + OPENAI_API_KEY[-4:] if OPENAI_API_KEY else 'Не установлен'}")
 
+# Словарь для отслеживания генераций изображений
+pending_generations = {}
+
 # Constants for balance system
 INITIAL_BALANCE = 5  # Stars
 GENERATION_COST = 25  # Stars per generation
@@ -474,42 +477,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
         
     elif query.data == "topup_balance":
-        try:
-            # Отвечаем на callback сразу, чтобы убрать индикатор загрузки
-            await query.answer()
-            
-            # Display star packages menu
-            topup_text = "Выберите количество звезд для покупки:"
-            
-            # Используем только один метод - отправку нового сообщения
-            # Это поможет избежать ошибок с редактированием сообщений
+        # Display star packages menu
+        topup_text = "Выберите количество звезд для покупки:"
+        
+        # Проверяем, является ли сообщение фотографией
+        if is_photo_message:
+            # Если это фото, отправляем новое сообщение
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=topup_text,
                 reply_markup=create_topup_menu()
             )
-            
-            # Пытаемся удалить старое сообщение, но игнорируем ошибки
-            try:
-                await context.bot.delete_message(
-                    chat_id=query.message.chat_id,
-                    message_id=query.message.message_id
-                )
-            except Exception as e:
-                # Игнорируем ошибки удаления
-                logger.info(f"Не удалось удалить сообщение при покупке звезд: {e}")
-                
-        except Exception as e:
-            logger.error(f"Ошибка при обработке кнопки 'topup_balance': {e}")
-            # Отправляем сообщение об ошибке
-            try:
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="Произошла ошибка при покупке звезд. Пожалуйста, попробуйте снова или введите /menu",
-                    reply_markup=create_main_menu()
-                )
-            except:
-                pass
+        else:
+            # Если это обычное сообщение, редактируем его
+            await query.edit_message_text(
+                text=topup_text,
+                reply_markup=create_topup_menu()
+            )
     
     elif query.data.startswith("buy_stars_"):
         stars_amount = int(query.data.split("_")[2])
@@ -753,50 +737,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
     
     elif query.data == "back_to_menu":
-        try:
-            # Отвечаем на callback сразу, чтобы убрать индикатор загрузки
-            await query.answer()
-            
-            # Get user balance
-            user_id = update.effective_user.id
-            balance = get_user_balance(user_id)
-            
-            # Check if the message contains a photo
-            is_photo_message = query.message.photo is not None if query.message else False
-            
-            menu_text = f"Главное меню\n\n"\
-                      f"Ваш текущий баланс: ⭐ {balance} звезд\n"\
-                      f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n"
-            
-            # Используем только один метод - отправку нового сообщения
-            # Это поможет избежать ошибок с редактированием сообщений
+        menu_text = f"Главное меню\n\n"\
+                  f"Ваш текущий баланс: ⭐ {balance} звезд\n"\
+                  f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n"
+        
+        # Проверяем, является ли сообщение фотографией
+        if is_photo_message:
+            # Если это фото, отправляем новое сообщение
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=menu_text,
                 reply_markup=create_main_menu()
             )
-            
-            # Пытаемся удалить старое сообщение, но игнорируем ошибки
-            try:
-                await context.bot.delete_message(
-                    chat_id=query.message.chat_id,
-                    message_id=query.message.message_id
-                )
-            except Exception as e:
-                # Игнорируем ошибки удаления
-                logger.info(f"Не удалось удалить сообщение: {e}")
-                
-        except Exception as e:
-            logger.error(f"Ошибка при обработке кнопки 'back_to_menu': {e}")
-            # Отправляем сообщение об ошибке
-            try:
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="Произошла ошибка при возврате в меню. Пожалуйста, попробуйте снова или введите /menu",
-                    reply_markup=create_main_menu()
-                )
-            except:
-                pass
+        else:
+            # Если это обычное сообщение, редактируем его
+            await query.edit_message_text(
+                text=menu_text,
+                reply_markup=create_main_menu()
+            )
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the pre-checkout callback."""
@@ -1088,118 +1046,48 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             """
         
         # Используем метод edit вместо generate для лучших результатов
-        try:
-            # Добавляем таймаут для запроса к OpenAI
-            import asyncio
-            from openai import AsyncOpenAI
-            
-            # Создаем асинхронный клиент с таймаутом
-            async_client = AsyncOpenAI(
-                api_key=OPENAI_API_KEY,
-                timeout=60.0  # Устанавливаем таймаут 60 секунд
+        with open(file_path, "rb") as img_file:
+            image_response = client.images.edit(
+                model="gpt-image-1",
+                image=img_file,
+                prompt=prompt,
+                size="1024x1536",
+                n=1
             )
+        
+        # Получаем изображение в формате base64
+        image_base64 = image_response.data[0].b64_json
+        image_bytes = base64.b64decode(image_base64)
+        
+        # Сохраняем изображение во временный файл для отправки
+        generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
+        with open(generated_file_path, "wb") as f:
+            f.write(image_bytes)
             
-            # Обновляем статусное сообщение каждые 10 секунд
-            update_task = asyncio.create_task(update_status_message(context, status_message, update))
-            
-            with open(file_path, "rb") as img_file:
-                # Запускаем запрос с таймаутом
-                try:
-                    image_response = await asyncio.wait_for(
-                        async_client.images.edit(
-                            model="gpt-image-1",
-                            image=img_file,
-                            prompt=prompt,
-                            size="1024x1536",
-                            n=1
-                        ),
-                        timeout=120  # Максимальное время ожидания - 2 минуты
-                    )
-                except asyncio.TimeoutError:
-                    # Если превышен таймаут, сообщаем пользователю
-                    try:
-                        update_task.cancel()  # Отменяем задачу обновления статуса
-                    except Exception as e:
-                        logger.error(f"Ошибка при отмене задачи обновления статуса: {e}")
-                    
-                    await context.bot.edit_message_text(
-                        chat_id=update.effective_chat.id,
-                        message_id=status_message.message_id,
-                        text="Генерация изображения заняла слишком много времени. Пожалуйста, попробуйте еще раз."
-                    )
-                    # Возвращаем звезды пользователю
-                    update_user_balance(user_id, GENERATION_COST)  # Добавляем звезды обратно
-                    return None, None
-            
-            # Отменяем задачу обновления статуса
-            try:
-                update_task.cancel()
-            except Exception as e:
-                logger.error(f"Ошибка при отмене задачи обновления статуса: {e}")
-                
-            # Не пытаемся отвечать на callback после длительной генерации
-            # Телеграм считает такие callback устаревшими
-            
-            # Получаем изображение в формате base64
-            image_base64 = image_response.data[0].b64_json
-            image_bytes = base64.b64decode(image_base64)
-            
-            # Сохраняем изображение во временный файл для отправки
-            generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
-            with open(generated_file_path, "wb") as f:
-                f.write(image_bytes)
-                
-            logger.info(f"Изображение успешно сгенерировано и сохранено в {generated_file_path}")
-            
-            # Удаляем временный файл изображения, чтобы не занимать дисковое пространство
-            try:
-                os.remove(file_path)
-                logger.info(f"Временный файл {file_path} успешно удален")
-            except Exception as file_error:
-                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
-            
-            # Deduct stars from user balance
-            update_user_balance(user_id, -GENERATION_COST)
-            current_balance = get_user_balance(user_id)
-            
-            return generated_file_path, current_balance
-            
-        except Exception as e:
-            logger.error(f"Ошибка при генерации изображения: {e}")
-            
-            # Пытаемся отменить задачу обновления статуса, если она была создана
-            try:
-                if 'update_task' in locals():
-                    update_task.cancel()
-            except Exception as cancel_error:
-                logger.error(f"Ошибка при отмене задачи обновления статуса: {cancel_error}")
-            
-            # Сообщаем пользователю об ошибке
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=status_message.message_id,
-                    text=f"Произошла ошибка при генерации изображения. Пожалуйста, попробуйте еще раз."
-                )
-            except Exception as message_error:
-                logger.error(f"Ошибка при отправке сообщения об ошибке: {message_error}")
-                # Пытаемся отправить новое сообщение
-                try:
-                    await context.bot.send_message(
-                        chat_id=update.effective_chat.id,
-                        text=f"Произошла ошибка при генерации изображения. Пожалуйста, попробуйте еще раз."
-                    )
-                except:
-                    pass
-            
-            # Возвращаем звезды пользователю
-            try:
-                update_user_balance(user_id, GENERATION_COST)  # Добавляем звезды обратно
-                logger.info(f"Звезды возвращены пользователю {user_id} из-за ошибки генерации")
-            except Exception as balance_error:
-                logger.error(f"Ошибка при возврате звезд: {balance_error}")
-            
-            return None, None
+        logger.info(f"Изображение успешно сгенерировано и сохранено в {generated_file_path}")
+        
+        # Удаляем временный файл изображения, чтобы не занимать дисковое пространство
+        try:
+            os.remove(file_path)
+            logger.info(f"Временный файл {file_path} успешно удален")
+        except Exception as file_error:
+            logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
+        
+        # Deduct stars from user balance
+        update_user_balance(user_id, -GENERATION_COST)
+        current_balance = get_user_balance(user_id)
+        
+        # Добавляем запись о генерации в словарь для отслеживания
+        generation_id = f"{user_id}_{int(time.time())}"
+        pending_generations[generation_id] = {
+            "user_id": user_id,
+            "chat_id": update.effective_chat.id,
+            "timestamp": time.time(),
+            "status": "pending"
+        }
+        
+        # Добавляем задачу на проверку доставки через 5 минут
+        context.job_queue.run_once(check_image_delivery, 5*60, data=generation_id, name=f"check_delivery_{generation_id}")
         
         # Создаем кнопки для добавления после генерации - строго 3 кнопки
         keyboard = [
@@ -1215,17 +1103,17 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 chat_id=update.effective_chat.id,
                 photo=photo_file,
                 caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
-                reply_markup=InlineKeyboardMarkup(keyboard)
+                reply_markup=reply_markup
             )
             
-            # Пытаемся удалить статусное сообщение после успешной отправки изображения
-            try:
-                await context.bot.delete_message(
-                    chat_id=update.effective_chat.id,
-                    message_id=status_message.message_id
-                )
-            except Exception as e:
-                logger.warning(f"Не удалось удалить статусное сообщение: {e}")
+            # Отмечаем, что изображение было успешно доставлено
+            # Проверяем, есть ли запись о генерации в словаре
+            generation_id = f"{user_id}_{int(time.time())}"
+            for gen_id, gen_data in list(pending_generations.items()):
+                if gen_data["user_id"] == user_id and gen_data["status"] == "pending":
+                    # Обновляем статус генерации
+                    pending_generations[gen_id]["status"] = "delivered"
+                    logger.info(f"Изображение успешно доставлено пользователю {user_id}")
         
         # Удаляем сгенерированный файл после отправки
         try:
@@ -1442,6 +1330,14 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         photo=photo_file,
                         caption=f"Ваше изображение (альтернативный метод)! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд"
                     )
+                    
+                    # Отмечаем, что изображение было успешно доставлено
+                    # Проверяем, есть ли запись о генерации в словаре
+                    for gen_id, gen_data in list(pending_generations.items()):
+                        if gen_data["user_id"] == user_id and gen_data["status"] == "pending":
+                            # Обновляем статус генерации
+                            pending_generations[gen_id]["status"] = "delivered"
+                            logger.info(f"Изображение успешно доставлено пользователю {user_id} (альтернативный метод)")
                 
                 # Удаляем временный файл после отправки
                 try:
@@ -1572,51 +1468,59 @@ def emergency_cleanup():
     
     logger.info(f"Экстренная очистка: удалено {deleted_count} файлов")
 
-# Функция для обновления статусного сообщения во время генерации изображения
-async def update_status_message(context, status_message, update):
-    """Периодически обновляет статусное сообщение, чтобы пользователь знал, что процесс идет"""
-    import asyncio
-    status_texts = [
-        "⏳ Генерация изображения... Это может занять до 2 минут",
-        "⏳ Генерация изображения... Пожалуйста, подождите",
-        "⏳ Генерация изображения... Создаем шедевр",
-        "⏳ Генерация изображения... Почти готово"
-    ]
+# Функция для проверки доставки изображения и возврата звезд
+async def check_image_delivery(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check if the image was delivered and refund stars if not."""
+    # Получаем ID генерации из данных задачи
+    generation_id = context.job.data
     
-    i = 0
-    try:
-        while True:
-            await context.bot.edit_message_text(
-                chat_id=update.effective_chat.id,
-                message_id=status_message.message_id,
-                text=status_texts[i % len(status_texts)]
+    # Проверяем, есть ли такая генерация в словаре
+    if generation_id in pending_generations:
+        generation_data = pending_generations[generation_id]
+        
+        # Проверяем, в каком статусе генерация
+        if generation_data["status"] == "pending":
+            # Если изображение все еще не доставлено, возвращаем звезды
+            user_id = generation_data["user_id"]
+            chat_id = generation_data["chat_id"]
+            
+            # Возвращаем звезды пользователю
+            update_user_balance(user_id, GENERATION_COST)
+            current_balance = get_user_balance(user_id)
+            
+            # Отправляем сообщение пользователю
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"Произошла ошибка при генерации изображения. \n\n⭐ {GENERATION_COST} звезд были возвращены на ваш баланс.\nТекущий баланс: ⭐ {current_balance} звезд\n\nПожалуйста, попробуйте еще раз.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Попробовать снова", callback_data="generate_image")],
+                    [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
+                ])
             )
-            i += 1
-            await asyncio.sleep(10)  # Обновляем каждые 10 секунд
-    except asyncio.CancelledError:
-        # Задача была отменена, это нормально
-        pass
-    except Exception as e:
-        logger.error(f"Ошибка при обновлении статусного сообщения: {e}")
+            
+            # Обновляем статус генерации
+            pending_generations[generation_id]["status"] = "refunded"
+            logger.info(f"Звезды возвращены пользователю {user_id} за недоставленное изображение")
 
 # Функция для настройки регулярных задач
 def setup_scheduled_tasks(updater):
-    """Настройка регулярных задач обслуживания."""
+    """Setup scheduled tasks for maintenance."""
     job_queue = updater.job_queue
     
-    # Очистка временных файлов каждые 30 минут
+    # Задача очистки временных файлов каждые 30 минут
     job_queue.run_repeating(cleanup_temp_files, interval=30*60, first=10)
+    logger.info("Задача очистки временных файлов добавлена в расписание")
     
-    # Более тщательная очистка раз в день - в 3 часа ночи
-    from datetime import time
-    time_of_day = time(3, 0, 0)  # 3:00 AM
-    job_queue.run_daily(cleanup_temp_files, time=time_of_day)
-    
-    logger.info("Запланированы регулярные задачи очистки временных файлов")
+    # Задача резервного копирования базы данных каждые 6 часов
+    job_queue.run_repeating(backup_db, interval=6*60*60, first=60*60)
+    logger.info("Задача резервного копирования базы данных добавлена в расписание")
+
+    # Задача проверки доставки изображения каждые 5 минут
+    job_queue.run_repeating(check_image_delivery, interval=5*60, first=10)
+    logger.info("Задача проверки доставки изображения добавлена в расписание")
 
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages."""
-    # Проверяем, что update и update.message не None
     if update and update.message:
         # Получаем user_id для проверки в базе данных
         user_id = update.effective_user.id
