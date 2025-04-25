@@ -11,6 +11,7 @@ import glob
 import time
 import shutil
 import asyncio
+import asyncpg
 from datetime import datetime
 from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
