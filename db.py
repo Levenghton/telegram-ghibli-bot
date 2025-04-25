@@ -178,6 +178,17 @@ async def update_user_balance(user_id, amount):
         # В случае ошибки возвращаем текущий баланс без изменений
         return await get_user_balance(user_id)
 
+async def get_user(user_id):
+    """Асинхронно получить данные пользователя по user_id."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            user = await conn.fetchrow('SELECT * FROM users WHERE user_id = $1', user_id)
+            return user
+    except Exception as e:
+        logger.error(f"Ошибка при получении данных пользователя {user_id}: {e}")
+        return None
+
 async def get_user_stats():
     """Асинхронно получить статистику по пользователям."""
     try:

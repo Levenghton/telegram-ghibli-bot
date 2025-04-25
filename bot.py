@@ -1472,7 +1472,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             context.user_data['user_data']['waiting_for_accessories'] = True
             
             # Отправляем сообщение с просьбой указать аксессуары
-            balance = get_user_balance(user_id)
+            balance = await get_user_balance(user_id)
             await update.message.reply_text(
                 f"🔮 Отлично! Имя для гравировки: <b>{custom_name}</b>\n\n"
                 f"Теперь укажите аксессуары для вашей игрушки в следующем сообщении.\n"
@@ -1558,12 +1558,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Если пользователь отправил сообщение до использования /start
         elif update.message.text and not update.message.text.startswith('/'):
             # Проверяем, существует ли пользователь в базе
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-            user = cur.fetchone()
-            cur.close()
-            conn.close()
+            user = await get_user(user_id)
             
             # Если пользователя нет в базе, отправляем ему информацию о боте
             if not user:
