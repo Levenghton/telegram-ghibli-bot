@@ -41,7 +41,7 @@ async def get_pool():
     if _pool is None:
         try:
             _pool = await asyncpg.create_pool(PG_CONNECTION_STRING, min_size=2, max_size=10)
-            logger.info(f"Создан пул соединений с базой данных PostgreSQL на {PG_HOST}:{PG_PORT}/{PG_DB}")
+            logger.info(f"Создан пул соединений с базой данных PostgreSQL")
         except Exception as e:
             logger.error(f"Ошибка при создании пула соединений с PostgreSQL: {e}")
             raise
