@@ -1642,11 +1642,8 @@ async def main() -> None:
                 await update_user_balance(user_id, amount)
                 logger.info(f"Создан новый пользователь {user_id} с балансом {amount} звезд")
         
-        # Пополняем баланс всем остальным пользователям на 5 звезд
-        for user_id in all_users:
-            if user_id not in special_users:
-                await update_user_balance(user_id, 5)
-                logger.info(f"Пополнен баланс пользователя {user_id} на 5 звезд")
+        # ВСЕМ остальным пользователям ничего не начисляем!
+        logger.info("Бонусные звезды начислены только указанным пользователям")
         
         # Создаем флаг, что бонус уже применен
         with open(bonus_flag_path, 'w') as f:
@@ -1768,7 +1765,7 @@ async def check_for_duplicate_bots():
         import httpx
         async with httpx.AsyncClient() as client:
             # Проверяем getMe - если бот уже работает, ответ должен быть быстрым
-            response = await client.post(f"https://api.telegram.org/bot{TOKEN}/getUpdates", 
+            response = await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", 
                                          json={"offset": -1, "limit": 1, "timeout": 1})
             if response.status_code == 409:  # Conflict - значит, есть другой экземпляр
                 logger.error("Обнаружен другой запущенный экземпляр бота! Этот экземпляр будет остановлен.")
@@ -1776,7 +1773,7 @@ async def check_for_duplicate_bots():
                 return True
                 
             # Дополнительная проверка - есть ли webhook
-            webhook_response = await client.post(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo")
+            webhook_response = await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getWebhookInfo")
             if webhook_response.status_code == 200:
                 webhook_info = webhook_response.json()
                 if webhook_info.get('result', {}).get('url'):
