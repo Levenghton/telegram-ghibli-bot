@@ -170,78 +170,39 @@ def restore_db_from_backup():
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Синхронная функция для вызова OpenAI API - её мы будем запускать в отдельном потоке
-def sync_openai_edit_image(image_data, prompt):
-    """Синхронная функция для вызова OpenAI API - будет запускаться через run_in_executor"""
-    import tempfile
-    import base64
-    import requests
+# Асинхронная функция для прямого вызова OpenAI API через aiohttp
+import aiohttp
+
+async def async_openai_edit_image(image_data: bytes, prompt: str) -> bytes:
+    """Асинхронный HTTP-запрос к OpenAI Images API через aiohttp."""
+    url = "https://api.openai.com/v1/images/edits"
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
     
-    # Создаем временный файл с расширением .jpg для корректного MIME типа
-    temp_path = None
+    # Создаем FormData для отправки файлов и параметров
+    form = aiohttp.FormData()
+    form.add_field("model", "gpt-image-1")
+    form.add_field("prompt", prompt)
+    form.add_field("size", "1024x1536")
+    form.add_field("n", "1")
+    form.add_field("image", 
+                   image_data, 
+                   filename="image.jpg", 
+                   content_type="image/jpeg")
+
     try:
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
-            temp_path = temp_file.name
-            temp_file.write(image_data)
-        
-        # Используем синхронный requests вместо асинхронного httpx
-        headers = {
-            'Authorization': f'Bearer {OPENAI_API_KEY}'
-        }
-        
-        with open(temp_path, 'rb') as f:
-            files = {
-                'image': ("image.jpg", f, 'image/jpeg'),
-                'prompt': (None, prompt),
-                'model': (None, "gpt-image-1"),
-                'size': (None, "1024x1536"),
-                'n': (None, "1"),
-            }
-            
-            # Синхронный запрос - он будет запущен в отдельном потоке
-            response = requests.post(
-                "https://api.openai.com/v1/images/edits",
-                headers=headers,
-                files=files,
-                timeout=90.0
-            )
-            
-            # Проверяем статус ответа
-            response.raise_for_status()
-            
-            # Парсим ответ
-            result = response.json()
-            
-            # Извлекаем данные изображения
-            image_base64 = result['data'][0]['b64_json']
-            image_bytes = base64.b64decode(image_base64)
-            
-            return image_bytes
-            
-    except requests.exceptions.RequestException as e:
+        # Нативная асинхронная отправка запроса через aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, data=form, timeout=90) as resp:
+                resp.raise_for_status()
+                obj = await resp.json()
+                b64 = obj["data"][0]["b64_json"]
+                return base64.b64decode(b64)
+    except aiohttp.ClientError as e:
         logger.error(f"Ошибка HTTP при обращении к OpenAI API: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            logger.error(f"Текст ответа: {e.response.text}")
         raise Exception(f"Ошибка OpenAI API: {str(e)}")
     except Exception as e:
         logger.error(f"Ошибка при генерации изображения: {e}")
         raise
-    finally:
-        # Всегда удаляем временный файл
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception as file_error:
-                logger.warning(f"Не удалось удалить временный файл: {file_error}")
-
-# Асинхронная обертка для запуска синхронной функции в отдельном потоке
-async def async_openai_edit_image(image_data, prompt):
-    """Асинхронная обертка для запуска синхронной функции в отдельном потоке"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,  # Используем пул потоков по умолчанию
-        lambda: sync_openai_edit_image(image_data, prompt)
-    )
 
 # Функция для периодического обновления статуса генерации изображения
 async def update_status_periodically(bot, chat_id, message_id, interval=5):

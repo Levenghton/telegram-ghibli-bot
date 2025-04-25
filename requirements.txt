@@ -5,3 +5,4 @@ asyncpg==0.29.0
 psycopg2-binary==2.9.9
 httpx==0.25.2
 requests==2.31.0
+aiohttp==3.9.1
