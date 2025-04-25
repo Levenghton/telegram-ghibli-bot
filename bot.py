@@ -65,32 +65,18 @@ STARS_PACKAGES = [
     {"stars": 500, "price": 500, "label": "20 фото"}
 ]
 
-# Initialize database
-def get_db_connection():
-    """Create and return a connection to the SQLite database."""
-    # Всегда используем директорию с ботом для хранения базы данных
-    db_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    db_path = os.path.join(db_dir, 'users.db')
-    logger.info(f"Подключение к базе данных по пути: {db_path}")
-    conn = sqlite3.connect(db_path)
-    return conn
+# Импортируем асинхронные функции для работы с PostgreSQL
+from db import (
+    init_db,
+    get_user_balance,
+    check_balance_sufficient,
+    create_user,
+    update_user_balance,
+    get_user_stats,
+    close_pool
+)
 
-# Асинхронные обертки для блокирующих функций
-async def async_get_user_balance(user_id):
-    """Async wrapper for get_user_balance."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, get_user_balance, user_id)
-
-async def async_check_balance_sufficient(user_id):
-    """Async wrapper for check_balance_sufficient."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, check_balance_sufficient, user_id)
-
-async def async_update_user_balance(user_id, amount):
-    """Async wrapper for update_user_balance."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, update_user_balance, user_id, amount)
+# Асинхронные обертки для блокирующих функций файловой системы
 
 async def async_save_file(file_path, content):
     """Async wrapper for file saving."""
@@ -170,110 +156,9 @@ def backup_db():
         return False
 
 def restore_db_from_backup():
-    """Restore database from the latest backup if the main database is corrupted or missing."""
-    try:
-        # Получаем путь к базе данных
-        db_dir = os.path.dirname(os.path.abspath(__file__))  # Всегда используем директорию с ботом
-        db_path = os.path.join(db_dir, 'users.db')
-        backup_dir = os.path.join(db_dir, 'backups')
-        
-        # Создаем директорию для резервных копий, если она не существует
-        os.makedirs(backup_dir, exist_ok=True)
-        
-        # Сначала проверяем наличие постоянной резервной копии
-        permanent_backup_path = os.path.join(backup_dir, 'users_permanent_backup.db')
-        if os.path.exists(permanent_backup_path):
-            # Копируем постоянную резервную копию в основной файл базы данных
-            shutil.copy2(permanent_backup_path, db_path)
-            logger.info(f"База данных успешно восстановлена из постоянной резервной копии: {permanent_backup_path}")
-            return True
-        
-        # Если постоянной резервной копии нет, проверяем наличие обычных резервных копий
-        backup_files = sorted(glob.glob(os.path.join(backup_dir, 'users_backup_*.db')))
-        if backup_files:
-            latest_backup = backup_files[-1]
-            
-            # Копируем последнюю резервную копию в основной файл базы данных
-            shutil.copy2(latest_backup, db_path)
-            logger.info(f"База данных успешно восстановлена из последней резервной копии: {latest_backup}")
-            
-            # Создаем постоянную резервную копию из последней резервной копии
-            shutil.copy2(latest_backup, permanent_backup_path)
-            logger.info(f"Создана постоянная резервная копия из последней резервной копии: {permanent_backup_path}")
-            return True
-        else:
-            logger.warning("Резервные копии не найдены.")
-            return False
-    except Exception as e:
-        logger.error(f"Ошибка при восстановлении базы данных из резервной копии: {e}")
-        return False
-
-def init_db():
-    """Initialize the database with users table."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        first_name TEXT,
-        last_name TEXT,
-        balance INTEGER DEFAULT 10,
-        total_generations INTEGER DEFAULT 0,
-        last_generation TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    conn.commit()
-    conn.close()
-    
-    # Создаем резервную копию после инициализации
-    backup_db()
-    logger.info("Database initialized")
-
-# User balance functions
-def get_user_balance(user_id):
-    """Get user balance from database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    
-    if result:
-        return result[0]
-    else:
-        # Create new user with initial balance
-        create_user(user_id, None, None, None)
-        return INITIAL_BALANCE
-
-def create_user(user_id, username, first_name, last_name):
-    """Create a new user in the database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-    INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, balance, created_at) 
-    VALUES (?, ?, ?, ?, ?, ?)
-    ''', (user_id, username, first_name, last_name, INITIAL_BALANCE, datetime.now()))
-    conn.commit()
-    conn.close()
-    logger.info(f"Created new user: {user_id}")
-
-def update_user_balance(user_id, amount):
-    """Update user balance."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
-    cursor.execute('UPDATE users SET total_generations = total_generations + 1 WHERE user_id = ?', (user_id,))
-    cursor.execute('UPDATE users SET last_generation = ? WHERE user_id = ?', (datetime.now(), user_id))
-    conn.commit()
-    conn.close()
-    logger.info(f"Updated balance for user {user_id}: {amount}")
-
-def check_balance_sufficient(user_id):
-    """Check if user has sufficient balance for generation."""
-    balance = get_user_balance(user_id)
-    return balance >= GENERATION_COST
+    """Эта функция больше не используется с PostgreSQL. Оставлена для совместимости."""
+    logger.info("Функция восстановления базы данных не требуется для PostgreSQL")
+    return True
 
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -1702,28 +1587,24 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         logger.error(f"Ошибка в text_message: update = {update}")
 
-def main() -> None:
+async def main() -> None:
     """Start the bot."""
     print(f"Запуск бота @{BOT_USERNAME}...")
     
-    # Пытаемся восстановить базу данных из резервной копии
-    db_dir = os.path.dirname(os.path.abspath(__file__))
-    db_path = os.path.join(db_dir, 'users.db')
-    
-    # Проверяем, существует ли основная база данных
-    if not os.path.exists(db_path):
-        logger.info("База данных не найдена. Пытаемся восстановить из резервной копии...")
-        if restore_db_from_backup():
-            logger.info("База данных успешно восстановлена из резервной копии!")
+    # Инициализируем PostgreSQL базу данных
+    try:
+        logger.info("Инициализация PostgreSQL базы данных...")
+        success = await init_db()
+        if success:
+            logger.info("База данных PostgreSQL успешно инициализирована")
         else:
-            logger.info("Не удалось восстановить базу данных из резервной копии. Создаем новую базу данных.")
-    else:
-        logger.info(f"База данных найдена по пути: {db_path}")
-        # Создаем резервную копию существующей базы данных при запуске
-        backup_db()
-    
-    # Initialize database (создаст таблицы, если они не существуют)
-    init_db()
+            logger.error("Ошибка при инициализации базы данных PostgreSQL")
+            print("Ошибка при инициализации базы данных PostgreSQL. Проверьте настройки подключения.")
+            return
+    except Exception as e:
+        logger.error(f"Ошибка при инициализации базы данных: {e}")
+        print(f"Ошибка при инициализации базы данных: {e}")
+        return
     
     # Пополнение баланса для указанных пользователей
     special_users = {
@@ -1771,35 +1652,30 @@ def main() -> None:
     bonus_flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bonus_applied.flag')
     if not os.path.exists(bonus_flag_path):
         logger.info("Применяем бонусные звезды для указанных пользователей...")
-        conn = get_db_connection()
-        cursor = conn.cursor()
         
-        # Получаем список всех пользователей
-        cursor.execute('SELECT user_id FROM users')
-        all_users = [row[0] for row in cursor.fetchall()]
+        # Получаем список всех пользователей (асинхронно)
+        pool = await asyncpg.create_pool(PG_CONNECTION_STRING)
+        async with pool.acquire() as conn:
+            all_users_records = await conn.fetch('SELECT user_id FROM users')
+            all_users = [record['user_id'] for record in all_users_records]
         
         # Пополняем баланс указанным пользователям
         for user_id, amount in special_users.items():
             # Проверяем, существует ли пользователь в базе
             if user_id in all_users:
-                update_user_balance(user_id, amount)
+                await update_user_balance(user_id, amount)
                 logger.info(f"Пополнен баланс пользователя {user_id} на {amount} звезд")
             else:
-                # Если пользователя нет в базе, создаем его запись
-                cursor.execute(
-                    'INSERT INTO users (user_id, username, first_name, balance, total_generations, created_at, last_generation) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                    (user_id, "", "", amount, 0, datetime.now(), datetime.now())
-                )
+                # Если пользователя нет в базе, создаем его с указанным балансом
+                await create_user(user_id, None, None, None)
+                await update_user_balance(user_id, amount)
                 logger.info(f"Создан новый пользователь {user_id} с балансом {amount} звезд")
         
         # Пополняем баланс всем остальным пользователям на 5 звезд
         for user_id in all_users:
             if user_id not in special_users:
-                update_user_balance(user_id, 5)
+                await update_user_balance(user_id, 5)
                 logger.info(f"Пополнен баланс пользователя {user_id} на 5 звезд")
-        
-        conn.commit()
-        conn.close()
         
         # Создаем флаг, что бонус уже применен
         with open(bonus_flag_path, 'w') as f:
@@ -1890,4 +1766,5 @@ def main() -> None:
         print(f"Критическая ошибка при запуске бота: {e}")
 
 if __name__ == '__main__':
-    main()
+    # Запускаем асинхронную функцию main() в цикле событий asyncio
+    asyncio.run(main())
