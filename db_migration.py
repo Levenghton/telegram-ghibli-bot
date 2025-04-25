@@ -20,14 +20,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Получаем параметры подключения к PostgreSQL из переменных окружения
-# или используем значения по умолчанию
-PG_HOST = os.getenv('PG_HOST', 'localhost')
-PG_PORT = os.getenv('PG_PORT', '5432')
-PG_DB = os.getenv('PG_DB', 'telegram_bot')
-PG_USER = os.getenv('PG_USER', 'postgres')
-PG_PASSWORD = os.getenv('PG_PASSWORD', 'postgres')
-PG_CONNECTION_STRING = f"postgresql://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DB}"
+# Жестко прописываем публичный URL подключения к PostgreSQL в Railway
+# Согласно настройкам в Railway: trolley.proxy.rlwy.net:50647
+PG_CONNECTION_STRING = "postgresql://postgres:nQBxTlmgJmYiFLfSYNeDMGWarRHUkweS@trolley.proxy.rlwy.net:50647/railway"
+logger.info("Используем явный URL для подключения к PostgreSQL")
+
+# Запасной вариант - попробуем использовать переменные окружения, если доступны
+DATABASE_URL = os.getenv('DATABASE_URL')
+DATABASE_PUBLIC_URL = os.getenv('DATABASE_PUBLIC_URL')
+
+# Если есть DATABASE_PUBLIC_URL, используем его
+if DATABASE_PUBLIC_URL and DATABASE_PUBLIC_URL != "None" and DATABASE_PUBLIC_URL != "":
+    PG_CONNECTION_STRING = DATABASE_PUBLIC_URL
+    logger.info("Используем DATABASE_PUBLIC_URL для подключения к PostgreSQL")
+# Если есть DATABASE_URL, используем его
+elif DATABASE_URL and DATABASE_URL != "None" and DATABASE_URL != "":
+    PG_CONNECTION_STRING = DATABASE_URL
+    logger.info("Используем DATABASE_URL для подключения к PostgreSQL")
 
 # Путь к SQLite базе данных
 SQLITE_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'users.db')
