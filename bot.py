@@ -14,7 +14,7 @@ import asyncpg
 from datetime import datetime
 from io import BytesIO
 # Импортируем функции и переменные из модуля db
-from db import PG_CONNECTION_STRING, init_db, get_user_balance, update_user_balance, create_user, check_balance_sufficient
+from db import PG_CONNECTION_STRING, init_db, get_user_balance, update_user_balance, create_user, check_balance_sufficient, get_user
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PreCheckoutQueryHandler
 from openai import OpenAI
@@ -172,6 +172,60 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Асинхронная функция для прямого вызова OpenAI API через aiohttp
 import aiohttp
+
+# Фоновая задача для генерации и отправки изображения
+async def generate_and_send_image(chat_id, image_data, prompt, context, user_id, style_name):
+    """Фоновая задача для генерации и отправки изображения без блокировки основного потока"""
+    try:
+        # Отправляем статусное сообщение
+        status = await context.bot.send_message(chat_id, f"⏳ Генерирую ваше изображение в стиле {style_name}…")
+        
+        # Запускаем периодическое обновление статуса
+        status_task = asyncio.create_task(
+            update_status_periodically(context.bot, chat_id, status.message_id)
+        )
+        
+        # Генерируем изображение
+        output = await asyncio.wait_for(async_openai_edit_image(image_data, prompt), timeout=90)
+        
+        # Отменяем задачу обновления статуса
+        status_task.cancel()
+        
+        # Списываем звезды
+        await update_user_balance(user_id, -GENERATION_COST)
+        current_balance = await get_user_balance(user_id)
+        
+        # Создаем кнопки для добавления после генерации - строго 3 кнопки
+        keyboard = [
+            [InlineKeyboardButton("Сгенерировать еще", callback_data="generate_new")],
+            [InlineKeyboardButton("Купить звезды", callback_data="topup_balance")],
+            [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Отправляем фото
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=output,
+            caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
+            reply_markup=reply_markup
+        )
+        
+    except asyncio.TimeoutError:
+        await context.bot.send_message(chat_id, "⚠️ Генерация изображения заняла слишком много времени. Пожалуйста, попробуйте еще раз.")
+        # Возвращаем звезды в случае неудачи
+        await update_user_balance(user_id, GENERATION_COST)
+    except Exception as e:
+        logger.error(f"Ошибка при генерации изображения: {e}")
+        await context.bot.send_message(chat_id, f"❌ Ошибка при генерации изображения. Попробуйте еще раз.")
+        # Возвращаем звезды в случае неудачи
+        await update_user_balance(user_id, GENERATION_COST)
+    finally:
+        # Удаляем статусное сообщение
+        try: 
+            await context.bot.delete_message(chat_id, status.message_id)
+        except Exception as msg_error:
+            logger.warning(f"Не удалось удалить статусное сообщение: {msg_error}")
 
 async def async_openai_edit_image(image_data: bytes, prompt: str) -> bytes:
     """Асинхронный HTTP-запрос к OpenAI Images API через aiohttp."""
@@ -1054,84 +1108,51 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             Include some Ghibli-style environment elements that complement the character.
             """
         
-        # Начинаем периодические обновления статуса, чтобы пользователь знал, что процесс идет
-        status_update_task = asyncio.create_task(
-            update_status_periodically(context.bot, update.effective_chat.id, status_message.message_id)
-        )
-        
-        # Подготовим файл изображения для передачи в OpenAI API - асинхронно
+        # Подготовим файл изображения для передачи в OpenAI API
         with open(file_path, "rb") as img_file:
             image_data = img_file.read()
-            
-        # Теперь используем полностью асинхронную функцию для вызова OpenAI API
-        try:
-            # Вызываем асинхронную функцию с таймаутом
-            output_image_data = await asyncio.wait_for(
-                async_openai_edit_image(image_data, prompt), 
-                timeout=90  # Увеличиваем таймаут до 90 секунд
-            )
-        except asyncio.TimeoutError:
-            # Отменяем задачу обновления статуса
-            status_update_task.cancel()
-            
-            # Сообщаем пользователю о таймауте
-            await context.bot.edit_message_text(
-                chat_id=update.effective_chat.id,
-                message_id=status_message.message_id,
-                text="\u26a0️ Генерация изображения заняла слишком много времени. Пожалуйста, попробуйте еще раз."
-            )
-            
-            # Проверяем, было ли списание звезд
-            if context.user_data.get('was_charged', False):
-                # Возвращаем баланс пользователю
-                await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
-                logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за таймаута")
-                # Сбрасываем флаг списания
-                context.user_data['was_charged'] = False
-                
-            # Удаляем временный файл
-            try:
-                os.remove(file_path)
-                logger.info(f"Временный файл {file_path} удален после таймаута")
-            except Exception as file_error:
-                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
-                
-            return  # Выходим из функции в случае таймаута
-        except Exception as e:
-            # Отменяем задачу обновления статуса
-            status_update_task.cancel()
-            
-            # Сообщаем пользователю об ошибке
-            logger.error(f"Ошибка при генерации изображения: {e}")
-            
-            await context.bot.edit_message_text(
-                chat_id=update.effective_chat.id,
-                message_id=status_message.message_id,
-                text=f"Ошибка при генерации изображения. Попробуйте еще раз или выберите другой стиль."
-            )
-            
-            # Проверяем, было ли списание звезд
-            if context.user_data.get('was_charged', False):
-                try:
-                    # Возвращаем баланс ТОЛЬКО если он был списан
-                    await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
-                    logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за ошибки генерации")
-                    # Сбрасываем флаг списания
-                    context.user_data['was_charged'] = False
-                except Exception as refund_error:
-                    logger.error(f"Ошибка при возврате баланса: {refund_error}")
-            
-            # Удаляем временный файл
-            try:
-                os.remove(file_path)
-                logger.info(f"Временный файл {file_path} удален после ошибки")
-            except Exception as file_error:
-                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
-            
-            return  # Выходим из функции в случае ошибки
         
-        # Отменяем обновление статуса, т.к. изображение успешно сгенерировано
-        status_update_task.cancel()
+        # Отменяем статусное сообщение, оно будет создано в фоновой задаче
+        try:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=status_message.message_id
+            )
+        except Exception as msg_error:
+            logger.warning(f"Не удалось удалить статусное сообщение: {msg_error}")
+        
+        # Списываем звёзды сразу (будут возвращены при ошибке)
+        await update_user_balance(user_id, -GENERATION_COST)
+        context.user_data['was_charged'] = True  # Отмечаем, что списание произошло
+        
+        # Запускаем фоновую задачу для генерации изображения
+        style_name = style_display_names.get(selected_style, "выбранном стиле")
+        asyncio.create_task(
+            generate_and_send_image(
+                update.effective_chat.id,
+                image_data,
+                prompt,
+                context,
+                user_id,
+                style_name
+            )
+        )
+        
+        # Удаляем временный файл
+        try:
+            os.remove(file_path)
+            logger.info(f"Временный файл {file_path} удален")
+        except Exception as file_error:
+            logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
+            
+        # Сразу возвращаемся из функции, чтобы не блокировать цикл событий
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Делаю ваше изображение в стиле {style_name}. Я пришлю результат, как только он будет готов! 💫"  
+        )
+        
+        # Выходим сразу, не ждем ответа от API
+        return
         
         # Сохраняем изображение во временный файл для отправки
         # output_image_data уже содержит декодированные байты изображения
