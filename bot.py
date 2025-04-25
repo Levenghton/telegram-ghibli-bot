@@ -1100,14 +1100,30 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 # Добавляем логирование перед запросом
                 logger.info(f"Sending request to OpenAI API for style: {selected_style}")
                 
-                # Отправляем запрос к API
-                image_response = client.images.edit(
-                    model="gpt-image-1",
-                    image=img_file,
-                    prompt=prompt,
-                    size="1024x1536",
-                    n=1
+                # Отправляем запрос к API в отдельном потоке, чтобы не блокировать бота
+                # Создаем копию файла в памяти, чтобы можно было закрыть файл
+                img_bytes = img_file.read()
+                
+                # Отправляем периодические обновления статуса, чтобы пользователь знал, что бот работает
+                status_update_task = asyncio.create_task(
+                    update_status_periodically(context.bot, update.effective_chat.id, status_message.message_id)
                 )
+                
+                # Запускаем запрос к OpenAI API в отдельном потоке
+                loop = asyncio.get_event_loop()
+                image_response = await loop.run_in_executor(
+                    None,
+                    lambda: client.images.edit(
+                        model="gpt-image-1",
+                        image=BytesIO(img_bytes),
+                        prompt=prompt,
+                        size="1024x1536",
+                        n=1
+                    )
+                )
+                
+                # Останавливаем задачу обновления статуса
+                status_update_task.cancel()
                 
                 # Логируем успешный ответ
                 logger.info(f"Received response from OpenAI API for style: {selected_style}")
@@ -1396,9 +1412,54 @@ def emergency_cleanup():
     
     logger.info(f"Экстренная очистка: удалено {deleted_count} файлов")
 
-# Функция для проверки доставки изображения и возврата звезд
+# Функция периодического обновления статуса во время генерации изображения
+async def update_status_periodically(bot, chat_id, message_id, interval=10):
+    """Update status message periodically to show progress."""
+    dots = 0
+    status_texts = [
+        "Генерирую изображение... Это может занять до минуты.",
+        "Преобразую ваше фото... Пожалуйста, подождите.",
+        "Искусственный интеллект работает над вашим изображением...",
+        "Добавляю финальные штрихи к вашему изображению...",
+        "Почти готово... Еще немного."
+    ]
+    status_index = 0
+    
+    try:
+        while True:
+            # Обновляем текст с точками
+            dots = (dots + 1) % 4
+            dot_string = "." * dots
+            
+            # Меняем текст каждые 30 секунд
+            if dots == 0:
+                status_index = (status_index + 1) % len(status_texts)
+            
+            status_text = f"{status_texts[status_index]}{dot_string}"
+            
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=status_text
+                )
+            except Exception as e:
+                # Игнорируем ошибку "message is not modified"
+                if "message is not modified" not in str(e).lower():
+                    logger.warning(f"Ошибка при обновлении статуса: {e}")
+            
+            # Ждем интервал перед следующим обновлением
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        # Задача была отменена, это нормально
+        pass
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка в update_status_periodically: {e}")
+
+# Функция проверки доставки изображения
 async def check_image_delivery(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Check if the image was delivered and refund stars if not."""
+    """Check if image was delivered to user and refund stars if not."""
+    logger.info(f"Checking image delivery for job: {context.job.name}")
     # Получаем ID генерации из данных задачи
     generation_id = context.job.data
     
