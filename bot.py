@@ -1136,6 +1136,9 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 update_task.cancel()
             except Exception as e:
                 logger.error(f"Ошибка при отмене задачи обновления статуса: {e}")
+                
+            # Не пытаемся отвечать на callback после длительной генерации
+            # Телеграм считает такие callback устаревшими
             
             # Получаем изображение в формате base64
             image_base64 = image_response.data[0].b64_json
@@ -1212,8 +1215,17 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 chat_id=update.effective_chat.id,
                 photo=photo_file,
                 caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
-                reply_markup=reply_markup
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
+            
+            # Пытаемся удалить статусное сообщение после успешной отправки изображения
+            try:
+                await context.bot.delete_message(
+                    chat_id=update.effective_chat.id,
+                    message_id=status_message.message_id
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось удалить статусное сообщение: {e}")
         
         # Удаляем сгенерированный файл после отправки
         try:
