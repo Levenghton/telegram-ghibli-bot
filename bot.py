@@ -1067,7 +1067,11 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             [InlineKeyboardButton("Купить звезды", callback_data="topup_balance")],
             [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        try:
+            reply_markup = InlineKeyboardMarkup(keyboard)
+        except Exception as e:
+            logger.error(f"Ошибка при создании клавиатуры: {e}")
+            reply_markup = None
         
         # Отправляем изображение пользователю из локального файла
         with open(generated_file_path, 'rb') as photo_file:
@@ -1588,6 +1592,32 @@ async def main() -> None:
     """Start the bot."""
     print(f"Запуск бота @{BOT_USERNAME}...")
     
+    # Принудительно удаляем вебхук, если он установлен
+    try:
+        import requests
+        # Проверяем, есть ли вебхук
+        bot_info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getWebhookInfo", timeout=5).json()
+        webhook_url = bot_info.get('result', {}).get('url')
+        
+        if webhook_url:
+            logger.warning(f"Обнаружен запущенный webhook: {webhook_url}. Удаляем...")
+            print(f"ВНИМАНИЕ: Обнаружен запущенный webhook: {webhook_url}. Удаляем...")
+            
+            # Удаляем webhook
+            delete_result = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=5).json()
+            if delete_result.get('ok'):
+                logger.info("Вебхук успешно удален")
+                print("Вебхук успешно удален")
+            else:
+                logger.error(f"Ошибка при удалении вебхука: {delete_result}")
+                print(f"Ошибка при удалении вебхука: {delete_result}")
+            
+            # Ждем немного, чтобы Telegram обработал запрос
+            import time
+            time.sleep(3)
+    except Exception as e:
+        logger.warning(f"Не удалось проверить/удалить webhook: {e}")
+    
     # Проверка на дубликаты экземпляров бота
     try:
         import requests
@@ -1660,8 +1690,16 @@ async def main() -> None:
         # Create the Application with extended timeout settings
         from telegram.ext import ApplicationBuilder
         
-        # Создаем приложение с расширенными настройками таймаута
-        application = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).connect_timeout(30).build()
+        # Создаем приложение с расширенными настройками таймаута и экспоненциальным ожиданием
+        application = ApplicationBuilder().token(TELEGRAM_TOKEN)\
+            .read_timeout(30)\
+            .connect_timeout(30)\
+            .get_updates_read_timeout(30)\
+            .get_updates_connect_timeout(30)\
+            .connection_pool_size(16)\
+            .pool_timeout(30)\
+            .concurrent_updates(True)\
+            .build()
         logger.info(f"Бот инициализирован с токеном: {TELEGRAM_TOKEN[:5]}...")
 
         # Регистрируем обработчик ошибок
@@ -1785,21 +1823,57 @@ async def check_for_duplicate_bots():
 
 # Основная стартовая функция
 async def run_bot():
-    """Run the bot with duplicate instances check."""
+    """Run the bot with duplicate instances check and resilient error handling."""
+    # Создаем замок-файл для предотвращения запуска дубликатов
+    import os
+    lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bot.lock')
+    
+    if os.path.exists(lock_file):
+        with open(lock_file, 'r') as f:
+            try:
+                import time, psutil
+                pid = int(f.read().strip())
+                if psutil.pid_exists(pid):
+                    print(f"Обнаружен файл блокировки с активным процессом (PID: {pid}). Возможно, бот уже запущен.")
+                    logger.warning(f"Обнаружен файл блокировки с активным процессом (PID: {pid}).")
+                    await close_pool()
+                    return
+            except (ValueError, ImportError):
+                pass
+    
+    # Записываем текущий PID в файл блокировки
+    import os
+    with open(lock_file, 'w') as f:
+        f.write(str(os.getpid()))
+    
     # Проверяем, есть ли уже работающие экземпляры бота
     duplicate_exists = await check_for_duplicate_bots()
     if duplicate_exists:
         print("Завершение работы текущего экземпляра, так как обнаружен другой работающий экземпляр бота.")
         await close_pool()  # Закрываем соединения с базой данных
+        try:
+            os.remove(lock_file)  # Удаляем файл блокировки
+        except:
+            pass
         return
     
     try:
-        # Запускаем бота
+        # Запускаем бота с обработкой ошибок
         await main()
+    except Exception as e:
+        logger.error(f"Критическая ошибка при работе бота: {e}")
+        print(f"Критическая ошибка при работе бота: {e}")
     finally:
         # Закрываем соединения с базой данных при завершении
         await close_pool()
         print("Соединения с базой данных закрыты.")
+        
+        # Удаляем файл блокировки при завершении
+        try:
+            os.remove(lock_file)
+            print(f"Файл блокировки удален: {lock_file}")
+        except Exception as e:
+            print(f"Не удалось удалить файл блокировки: {e}")
 
 if __name__ == '__main__':
     # Запускаем бота с проверкой наличия дубликатов
