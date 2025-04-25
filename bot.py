@@ -54,7 +54,7 @@ print(f"OPENAI_API_KEY: {'***' + OPENAI_API_KEY[-4:] if OPENAI_API_KEY else 'Н�
 pending_generations = {}
 
 # Constants for balance system
-INITIAL_BALANCE = 5  # Stars
+DEFAULT_BALANCE = 5  # Stars for new users
 GENERATION_COST = 25  # Stars per generation
 
 # Constants for Telegram Stars payments
@@ -194,19 +194,36 @@ def get_user_balance(user_id):
     else:
         # Create new user with initial balance
         create_user(user_id, None, None, None)
-        return INITIAL_BALANCE
+        return DEFAULT_BALANCE
 
-def create_user(user_id, username, first_name, last_name):
-    """Create a new user in the database."""
+def create_user(user_id, username="", first_name="", last_name=""):
+    """Create a new user in the database if they don't already exist."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-    INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, balance, created_at) 
-    VALUES (?, ?, ?, ?, ?, ?)
-    ''', (user_id, username, first_name, last_name, INITIAL_BALANCE, datetime.now()))
-    conn.commit()
+    
+    # Проверяем, существует ли пользователь уже в базе
+    cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
+    existing_user = cursor.fetchone()
+    
+    if not existing_user:
+        # Создаем пользователя, только если он не существует
+        cursor.execute(
+            'INSERT INTO users (user_id, username, first_name, last_name, balance, total_generations, created_at, last_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (user_id, username, first_name, last_name, DEFAULT_BALANCE, 0, datetime.now(), datetime.now())
+        )
+        conn.commit()
+        logger.info(f"Created new user: {user_id}")
+    else:
+        # Обновляем информацию о пользователе, если он уже существует
+        if username or first_name or last_name:
+            cursor.execute(
+                'UPDATE users SET username = COALESCE(NULLIF(?, ""), username), first_name = COALESCE(NULLIF(?, ""), first_name), last_name = COALESCE(NULLIF(?, ""), last_name) WHERE user_id = ?',
+                (username, first_name, last_name, user_id)
+            )
+            conn.commit()
+            logger.debug(f"Updated existing user info: {user_id}")
+    
     conn.close()
-    logger.info(f"Created new user: {user_id}")
 
 def update_user_balance(user_id, amount):
     """Update user balance."""
@@ -406,7 +423,13 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle button presses."""
     query = update.callback_query
-    await query.answer()
+    
+    # Пытаемся ответить на callback запрос с обработкой ошибок
+    try:
+        await query.answer()
+    except Exception as e:
+        # Если не удалось ответить на callback, просто логируем и продолжаем
+        logger.warning(f"Не удалось ответить на callback: {e}")
     
     user_id = query.from_user.id
     balance = get_user_balance(user_id)
@@ -737,24 +760,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
     
     elif query.data == "back_to_menu":
-        menu_text = f"Главное меню\n\n"\
+        menu_text = f"🌟 Главное меню\n\n"\
                   f"Ваш текущий баланс: ⭐ {balance} звезд\n"\
                   f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n"
         
-        # Проверяем, является ли сообщение фотографией
-        if is_photo_message:
-            # Если это фото, отправляем новое сообщение
+        try:
+            # Проверяем, есть ли фото в сообщении
+            is_photo_message = hasattr(query.message, 'photo') and query.message.photo
+            
+            # Всегда отправляем новое сообщение вместо редактирования
+            # Это избегает ошибок с устаревшими сообщениями
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=menu_text,
                 reply_markup=create_main_menu()
             )
-        else:
-            # Если это обычное сообщение, редактируем его
-            await query.edit_message_text(
-                text=menu_text,
-                reply_markup=create_main_menu()
-            )
+            
+            # Пытаемся удалить предыдущее сообщение, но не прерываем выполнение в случае ошибки
+            try:
+                await context.bot.delete_message(
+                    chat_id=query.message.chat_id,
+                    message_id=query.message.message_id
+                )
+            except Exception as delete_error:
+                logger.warning(f"Не удалось удалить сообщение: {delete_error}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при обработке кнопки 'Вернуться в главное меню': {e}")
+            # В случае ошибки пытаемся отправить новое сообщение
+            try:
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text=menu_text,
+                    reply_markup=create_main_menu()
+                )
+            except Exception as send_error:
+                logger.error(f"Не удалось отправить сообщение с главным меню: {send_error}")
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the pre-checkout callback."""
@@ -1046,18 +1087,69 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             """
         
         # Используем метод edit вместо generate для лучших результатов
-        with open(file_path, "rb") as img_file:
-            image_response = client.images.edit(
-                model="gpt-image-1",
-                image=img_file,
-                prompt=prompt,
-                size="1024x1536",
-                n=1
+        try:
+            logger.info(f"Starting image generation for style: {selected_style}")
+            logger.info(f"Prompt length: {len(prompt)} characters")
+            
+            # Устанавливаем таймаут для запроса к API
+            import httpx
+            client._client.timeout = httpx.Timeout(60.0)  # Увеличиваем таймаут до 60 секунд
+            
+            with open(file_path, "rb") as img_file:
+                # Добавляем логирование перед запросом
+                logger.info(f"Sending request to OpenAI API for style: {selected_style}")
+                
+                # Отправляем запрос к API
+                image_response = client.images.edit(
+                    model="gpt-image-1",
+                    image=img_file,
+                    prompt=prompt,
+                    size="1024x1536",
+                    n=1
+                )
+                
+                # Логируем успешный ответ
+                logger.info(f"Received response from OpenAI API for style: {selected_style}")
+            
+            # Проверяем, что в ответе есть данные
+            if not image_response.data or len(image_response.data) == 0:
+                raise Exception("Empty response data from OpenAI API")
+            
+            # Получаем изображение в формате base64
+            image_base64 = image_response.data[0].b64_json
+            if not image_base64:
+                raise Exception("No base64 image data in the response")
+                
+            logger.info(f"Successfully decoded base64 image for style: {selected_style}")
+            image_bytes = base64.b64decode(image_base64)
+            
+        except Exception as api_error:
+            # Подробно логируем ошибку
+            logger.error(f"Error during OpenAI API request for style {selected_style}: {api_error}")
+            
+            # Отправляем сообщение об ошибке пользователю
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=status_message.message_id,
+                text=f"Произошла ошибка при генерации изображения в стиле '{style_name}'. Пожалуйста, попробуйте другой стиль или повторите попытку позже."
             )
-        
-        # Получаем изображение в формате base64
-        image_base64 = image_response.data[0].b64_json
-        image_bytes = base64.b64decode(image_base64)
+            
+            # Возвращаем звезды пользователю
+            update_user_balance(user_id, GENERATION_COST)  # Возвращаем звезды
+            current_balance = get_user_balance(user_id)
+            
+            # Отправляем сообщение о возврате звезд
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Звезды возвращены на ваш баланс. Текущий баланс: ⭐ {current_balance} звезд",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Попробовать снова", callback_data="generate_image")],
+                    [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
+                ])
+            )
+            
+            # Завершаем функцию
+            return
         
         # Сохраняем изображение во временный файл для отправки
         generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
