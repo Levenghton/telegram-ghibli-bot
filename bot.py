@@ -170,77 +170,78 @@ def restore_db_from_backup():
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Асинхронная функция для работы с OpenAI API
-async def async_openai_edit_image(image_data, prompt):
-    """Асинхронная функция для прямого вызова OpenAI Images API через httpx."""
-    import httpx
+# Синхронная функция для вызова OpenAI API - её мы будем запускать в отдельном потоке
+def sync_openai_edit_image(image_data, prompt):
+    """Синхронная функция для вызова OpenAI API - будет запускаться через run_in_executor"""
     import tempfile
-    import json
     import base64
+    import requests
     
-    # Сохраняем изображение во временный файл с расширением .jpg для правильного MIME типа
+    # Создаем временный файл с расширением .jpg для корректного MIME типа
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
             temp_path = temp_file.name
             temp_file.write(image_data)
         
-        # Асинхронно отправляем запрос к OpenAI API
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            # Подготавливаем файлы и параметры запроса
-            with open(temp_path, 'rb') as f:
-                files = {
-                    'image': ("image.jpg", f, 'image/jpeg'),
-                    'prompt': (None, prompt),
-                    'model': (None, "gpt-image-1"),
-                    'size': (None, "1024x1536"),
-                    'n': (None, "1"),
-                }
-                
-                # Асинхронно выполняем запрос к API
-                headers = {
-                    'Authorization': f'Bearer {OPENAI_API_KEY}'
-                }
-                
-                response = await client.post(
-                    "https://api.openai.com/v1/images/edits",
-                    headers=headers,
-                    files=files
-                )
-                
-                # Проверяем статус ответа
-                response.raise_for_status()
-                
-                # Парсим ответ
-                result = response.json()
-                
-                # Извлекаем данные изображения
-                image_base64 = result['data'][0]['b64_json']
-                image_bytes = base64.b64decode(image_base64)
-                
-                # Удаляем временный файл
-                try:
-                    await async_remove_file(temp_path)
-                    temp_path = None  # Сбрасываем путь после удаления
-                except Exception as e:
-                    logger.warning(f"Не удалось удалить временный файл: {e}")
-                    
-                return image_bytes
-                
-        # Обработка ошибок API        
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Ошибка HTTP при обращении к OpenAI API: {e.response.text}")
-        raise Exception(f"Ошибка OpenAI API: {e.response.text}")
+        # Используем синхронный requests вместо асинхронного httpx
+        headers = {
+            'Authorization': f'Bearer {OPENAI_API_KEY}'
+        }
+        
+        with open(temp_path, 'rb') as f:
+            files = {
+                'image': ("image.jpg", f, 'image/jpeg'),
+                'prompt': (None, prompt),
+                'model': (None, "gpt-image-1"),
+                'size': (None, "1024x1536"),
+                'n': (None, "1"),
+            }
+            
+            # Синхронный запрос - он будет запущен в отдельном потоке
+            response = requests.post(
+                "https://api.openai.com/v1/images/edits",
+                headers=headers,
+                files=files,
+                timeout=90.0
+            )
+            
+            # Проверяем статус ответа
+            response.raise_for_status()
+            
+            # Парсим ответ
+            result = response.json()
+            
+            # Извлекаем данные изображения
+            image_base64 = result['data'][0]['b64_json']
+            image_bytes = base64.b64decode(image_base64)
+            
+            return image_bytes
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка HTTP при обращении к OpenAI API: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            logger.error(f"Текст ответа: {e.response.text}")
+        raise Exception(f"Ошибка OpenAI API: {str(e)}")
     except Exception as e:
         logger.error(f"Ошибка при генерации изображения: {e}")
         raise
     finally:
-        # Всегда удаляем временный файл если он еще существует
+        # Всегда удаляем временный файл
         if temp_path and os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
             except Exception as file_error:
                 logger.warning(f"Не удалось удалить временный файл: {file_error}")
+
+# Асинхронная обертка для запуска синхронной функции в отдельном потоке
+async def async_openai_edit_image(image_data, prompt):
+    """Асинхронная обертка для запуска синхронной функции в отдельном потоке"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,  # Используем пул потоков по умолчанию
+        lambda: sync_openai_edit_image(image_data, prompt)
+    )
 
 # Функция для периодического обновления статуса генерации изображения
 async def update_status_periodically(bot, chat_id, message_id, interval=5):
@@ -1725,7 +1726,7 @@ async def main() -> None:
     # Проверка на дубликаты экземпляров бота
     try:
         import requests
-        bot_info = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo", timeout=5).json()
+        bot_info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getWebhookInfo", timeout=5).json()
         if bot_info.get('result', {}).get('url'):
             logger.warning("Обнаружен запущенный webhook. Возможно, бот уже запущен в другом месте.")
             print("ВНИМАНИЕ: Обнаружен запущенный webhook. Возможно, бот уже запущен в другом месте.")
