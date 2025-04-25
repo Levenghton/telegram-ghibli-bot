@@ -10,6 +10,7 @@ import os
 import glob
 import time
 import shutil
+import asyncio
 from datetime import datetime
 from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
