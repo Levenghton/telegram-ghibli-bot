@@ -1058,8 +1058,8 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
         
         # Deduct stars from user balance
-        update_user_balance(user_id, -GENERATION_COST)
-        current_balance = get_user_balance(user_id)
+        await update_user_balance(user_id, -GENERATION_COST)
+        current_balance = await get_user_balance(user_id)
         
         # Создаем кнопки для добавления после генерации - строго 3 кнопки
         keyboard = [
