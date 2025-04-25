@@ -15,6 +15,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Labeled
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PreCheckoutQueryHandler
 from openai import OpenAI
 from openai import OpenAIError
+import traceback
 
 # Создаем директории для временных файлов
 TEMP_DIR = "images/temp"
@@ -1223,245 +1224,80 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception as msg_error:
             logger.warning(f"Не удалось удалить статусное сообщение: {msg_error}")
             
-    except OpenAIError as e:
-        logger.error(f"Ошибка OpenAI при обработке изображения: {e}")
+    except Exception as e:
+        # Подробно логируем ошибку
+        logger.error(f"Общая ошибка при обработке изображения: {e}")
         
         # Удаляем временный файл в случае ошибки
         try:
             os.remove(file_path)
-            logger.info(f"Временный файл {file_path} удален после ошибки OpenAI")
+            logger.info(f"Временный файл {file_path} удален после ошибки")
         except Exception as file_error:
             logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
         
-        # Запасной вариант: попробуем DALL-E 2 вариации
+        # Отправляем сообщение об ошибке пользователю
         try:
             await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=status_message.message_id,
-                text="Использую альтернативный метод обработки... 🖌️"
+                text=f"Произошла ошибка при обработке изображения. Пожалуйста, попробуйте другой стиль или повторите попытку позже."
             )
+        except Exception as msg_error:
+            logger.warning(f"Не удалось отправить сообщение об ошибке: {msg_error}")
+        
+        # Возвращаем звезды пользователю
+        update_user_balance(user_id, GENERATION_COST)  # Возвращаем звезды
+        current_balance = get_user_balance(user_id)
+        
+        # Отправляем сообщение о возврате звезд
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Звезды возвращены на ваш баланс. Текущий баланс: ⭐ {current_balance} звезд",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Попробовать снова", callback_data="generate_image")],
+                    [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
+                ])
+            )
+        except Exception as msg_error:
+            logger.warning(f"Не удалось отправить сообщение о возврате звезд: {msg_error}")
+            # Завершаем функцию после обработки ошибки
+            return
+    
+    # Общий обработчик ошибок для необработанных исключений
+    except Exception as e:
+        logger.error(f"Необработанная ошибка: {e}")
+        
+        # Возвращаем звезды пользователю, если они были списаны
+        try:
+            # Проверяем, были ли списаны звезды
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT last_transaction FROM users WHERE user_id = ?", (user_id,))
+            last_transaction = cur.fetchone()
+            conn.close()
             
-            # Выбираем промпт в зависимости от выбранного стиля
-            if selected_style == "ghibli":
-                prompt = """
-                Transform this person into a Studio Ghibli animation character. 
-                Use Ghibli's distinctive hand-drawn style with soft watercolor backgrounds and warm color palette.
-                Add characteristic Ghibli lighting and atmosphere.
-                Maintain the person's likeness and key features while adapting to Ghibli style.
-                Include some Ghibli-style environment elements that complement the character.
-                """
-            elif selected_style == "disney":
-                prompt = """
-                Transform this person into a Disney 3D animation character.
-                Use vibrant colors, expressive features, and Disney's characteristic lighting style.
-                Add Disney-style magical environment elements.
-                Maintain the person's likeness and key features while adapting to Disney animation style.
-                """
-            elif selected_style == "lego":
-                prompt = """
-                Transform this person into a LEGO minifigure.
-                Use authentic LEGO minifigure appearance with plastic toy aesthetic.
-                Add characteristic LEGO shapes and bright LEGO colors palette.
-                Include a LEGO brick background/environment.
-                Maintain the person's distinguishing features translated to LEGO style.
-                """
-            elif selected_style == "simpsons":
-                prompt = """
-                Transform this person into a Simpsons character.
-                Use classic Simpsons yellow skin and distinctive art style.
-                Add Simpsons character proportions with overbite and four fingers per hand.
-                Include typical Simpsons background elements.
-                Maintain the person's distinguishing features adapted to Simpsons style.
-                """
-            elif selected_style == "soviet":
-                prompt = """
-                Transform this person into a Soviet animation character from the 1970s-80s.
-                Use soft, painterly style with muted color palette.
-                Add characteristic round facial features and expressive eyes.
-                Include gentle outlines and watercolor-like textures.
-                Add nostalgic Soviet-era background elements.
-                """
-            elif selected_style == "marvel":
-                prompt = """
-                Transform this person into a Marvel Comics character.
-                Use dynamic Marvel comic book illustration style with bold outlines and dramatic shading.
-                Add vibrant comic book colors and contrast.
-                Include heroic pose and composition with comic panel background elements.
-                Maintain the person's distinguishing features adapted to Marvel style.
-                """
-            elif selected_style == "blythe":
-                prompt = """
-                Transform this person into a Blythe doll.
-                Use characteristic Blythe doll aesthetic with large head and oversized eyes.
-                Add distinctive glossy finish and porcelain-like skin texture.
-                Include pastel or vibrant colors typical for Blythe dolls.
-                Add cute, slightly dreamy expression and Blythe doll fashion elements.
-                """
-            else:
-                # Default to Ghibli if style not recognized
-                prompt = """
-                Transform this person into a Studio Ghibli animation character. 
-                Use Ghibli's distinctive hand-drawn style with soft watercolor backgrounds and warm color palette.
-                Add characteristic Ghibli lighting and atmosphere.
-                Maintain the person's likeness and key features while adapting to Ghibli style.
-                Include some Ghibli-style environment elements that complement the character.
-                """
-            
-            # Используем метод edit вместо generate для лучших результатов
-            with open(file_path, "rb") as img_file:
-                image_response = client.images.edit(
-                    model="gpt-image-1",
-                    image=img_file,
-                    prompt=prompt,
-                    size="1024x1536",
-                    n=1
-                )
-            
-            # Получаем изображение в формате base64
-            image_base64 = image_response.data[0].b64_json
-            image_bytes = base64.b64decode(image_base64)
-            
-            # Сохраняем изображение во временный файл для отправки
-            generated_file_path = f"{tmp_dir}/generated_{unique_id}.png"
-            with open(generated_file_path, "wb") as f:
-                f.write(image_bytes)
-                
-            logger.info(f"Изображение успешно сгенерировано и сохранено в {generated_file_path}")
-            
-            # Удаляем временный файл изображения, чтобы не занимать дисковое пространство
-            try:
-                os.remove(file_path)
-                logger.info(f"Временный файл {file_path} успешно удален")
-            except Exception as file_error:
-                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
-            
-            # Deduct stars from user balance
-            update_user_balance(user_id, -GENERATION_COST)
-            current_balance = get_user_balance(user_id)
-            
-            # Создаем кнопки для добавления после генерации - строго 3 кнопки
-            keyboard = [
-                [InlineKeyboardButton("Сгенерировать еще", callback_data="generate_new")],
-                [InlineKeyboardButton("Купить звезды", callback_data="topup_balance")],
-                [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            # Отправляем изображение пользователю из локального файла
-            with open(generated_file_path, 'rb') as photo_file:
-                await context.bot.send_photo(
-                    chat_id=update.effective_chat.id,
-                    photo=photo_file,
-                    caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
-                    reply_markup=reply_markup
-                )
-            
-            # Удаляем сгенерированный файл после отправки
-            try:
-                os.remove(generated_file_path)
-                logger.info(f"Сгенерированный файл {generated_file_path} успешно удален")
-            except Exception as file_error:
-                logger.warning(f"Не удалось удалить сгенерированный файл {generated_file_path}: {file_error}")
-            
-            # Удаляем статусное сообщение
-            try:
-                await context.bot.delete_message(
-                    chat_id=update.effective_chat.id,
-                    message_id=status_message.message_id
-                )
-            except Exception as msg_error:
-                logger.warning(f"Не удалось удалить статусное сообщение: {msg_error}")
-                
-        except OpenAIError as e:
-            logger.error(f"Ошибка OpenAI при обработке изображения: {e}")
-            
-            # Удаляем временный файл в случае ошибки
-            try:
-                os.remove(file_path)
-                logger.info(f"Временный файл {file_path} удален после ошибки OpenAI")
-            except Exception as file_error:
-                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
-            
-            # Запасной вариант: попробуем DALL-E 2 вариации
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=status_message.message_id,
-                    text="Использую альтернативный метод обработки... 🖌️"
-                )
-                
-                # Используем новый API для редактирования изображений
-                with open(file_path, "rb") as img_file:
-                    image_edit = client.images.edit(
-                        model="gpt-image-1",
-                        image=img_file,
-                        prompt=f"Create a {selected_style} style portrait of this person with artistic details",
-                        size="1024x1536",
-                        n=1
-                    )
-                
-                # Получаем изображение в формате base64
-                image_base64 = image_edit.data[0].b64_json
-                image_bytes = base64.b64decode(image_base64)
-                
-                # Сохраняем изображение во временный файл для отправки
-                backup_file_path = f"{tmp_dir}/backup_{unique_id}.png"
-                with open(backup_file_path, "wb") as f:
-                    f.write(image_bytes)
-                
-                logger.info("Альтернативное изображение успешно создано")
-                
-                # Deduct stars from user balance
-                update_user_balance(user_id, -GENERATION_COST)
+            # Если была транзакция списания и она не была возвращена
+            if last_transaction and last_transaction[0] == -GENERATION_COST:
+                update_user_balance(user_id, GENERATION_COST)  # Возвращаем звезды
                 current_balance = get_user_balance(user_id)
                 
-                # Отправляем изображение пользователю из локального файла
-                with open(backup_file_path, 'rb') as photo_file:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=photo_file,
-                        caption=f"Ваше изображение (альтернативный метод)! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд"
-                    )
-                    
-                    # Отмечаем, что изображение было успешно доставлено
-                    # Проверяем, есть ли запись о генерации в словаре
-                    for gen_id, gen_data in list(pending_generations.items()):
-                        if gen_data["user_id"] == user_id and gen_data["status"] == "pending":
-                            # Обновляем статус генерации
-                            pending_generations[gen_id]["status"] = "delivered"
-                            logger.info(f"Изображение успешно доставлено пользователю {user_id} (альтернативный метод)")
-                
-                # Удаляем временный файл после отправки
-                try:
-                    os.remove(backup_file_path)
-                    logger.info(f"Временный файл {backup_file_path} успешно удален")
-                except Exception as file_error:
-                    logger.warning(f"Не удалось удалить временный файл {backup_file_path}: {file_error}")
-                
-                # Удаляем статусное сообщение
-                await context.bot.delete_message(
+                # Отправляем сообщение о возврате звезд
+                await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    message_id=status_message.message_id
+                    text=f"Звезды возвращены на ваш баланс из-за ошибки. Текущий баланс: ⭐ {current_balance} звезд"
                 )
-                
-            except Exception as e2:
-                logger.error(f"Ошибка альтернативного метода: {e2}")
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=status_message.message_id,
-                    text=f"К сожалению, не удалось обработать изображение: {str(e2)}"
-                )
-    
-    except Exception as e:
-        logger.error(f"Общая ошибка: {e}")
+        except Exception as balance_error:
+            logger.error(f"Ошибка при попытке возврата звезд: {balance_error}")
+        
+        # Пытаемся отправить сообщение об ошибке
         try:
-            await context.bot.edit_message_text(
+            await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                message_id=status_message.message_id,
-                text=f"Произошла ошибка при обработке изображения: {str(e)}"
+                text=f"Произошла неожиданная ошибка. Пожалуйста, попробуйте еще раз позже."
             )
-        except:
-            await update.message.reply_text(f"Произошла ошибка при обработке изображения: {str(e)}")
+        except Exception as msg_error:
+            logger.error(f"Не удалось отправить сообщение о необработанной ошибке: {msg_error}")
 
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка текстовых сообщений."""
@@ -1863,11 +1699,62 @@ def main() -> None:
         application = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).connect_timeout(30).build()
         logger.info(f"Бот инициализирован с токеном: {TELEGRAM_TOKEN[:5]}...")
 
-        # Регистрируем обработчик ошибок
+        # Регистрируем улучшенный обработчик ошибок
         async def error_handler(update, context):
-            logger.error(f"Ошибка при обработке обновления: {context.error}")
+            # Получаем текст ошибки
+            error_text = str(context.error)
+            logger.error(f"Ошибка при обработке обновления: {error_text}")
+            
+            # Логируем информацию об обновлении, если оно есть
             if update:
                 logger.error(f"Обновление, вызвавшее ошибку: {update}")
+                
+                # Получаем информацию о пользователе
+                user_id = None
+                if update.effective_user:
+                    user_id = update.effective_user.id
+                    logger.error(f"Пользователь, вызвавший ошибку: {user_id}")
+                
+                # Обрабатываем специфические ошибки
+                if "Forbidden: bot was blocked by the user" in error_text:
+                    logger.warning(f"Пользователь {user_id} заблокировал бота")
+                    # Можно добавить пользователя в черный список или предпринять другие действия
+                elif "Message is not modified" in error_text:
+                    # Это не критическая ошибка, просто логируем её
+                    logger.info(f"Попытка изменить сообщение, которое не было изменено")
+                elif "Message to edit not found" in error_text:
+                    logger.info(f"Попытка изменить сообщение, которое не найдено")
+                elif "Query is too old" in error_text:
+                    # Пользователь нажал на кнопку слишком поздно
+                    if user_id and update.callback_query:
+                        try:
+                            # Отправляем сообщение о том, что кнопка устарела
+                            await context.bot.answer_callback_query(
+                                callback_query_id=update.callback_query.id,
+                                text="Эта кнопка устарела. Пожалуйста, используйте новые кнопки.",
+                                show_alert=True
+                            )
+                        except Exception as e:
+                            logger.error(f"Ошибка при отправке уведомления о устаревшей кнопке: {e}")
+                
+                # Проверяем, есть ли незавершенные генерации для пользователя
+                if user_id:
+                    # Проверяем пендинги на случай, если пользователь заблокировал бота во время генерации
+                    for gen_id, gen_data in list(pending_generations.items()):
+                        if gen_data["user_id"] == user_id and gen_data["status"] == "pending":
+                            # Возвращаем звезды пользователю, если он заблокировал бота
+                            try:
+                                update_user_balance(user_id, GENERATION_COST)  # Возвращаем звезды
+                                pending_generations[gen_id]["status"] = "refunded"
+                                logger.info(f"Звезды возвращены пользователю {user_id} после блокировки бота")
+                            except Exception as e:
+                                logger.error(f"Ошибка при возврате звезд пользователю {user_id}: {e}")
+            
+            # Обрабатываем другие типы ошибок
+            if isinstance(context.error, Exception):
+                tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+                tb_string = ''.join(tb_list)
+                logger.error(f"Стек вызовов ошибки:\n{tb_string}")
                 
         application.add_error_handler(error_handler)
         
