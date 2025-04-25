@@ -14,6 +14,8 @@ import asyncio
 import asyncpg
 from datetime import datetime
 from io import BytesIO
+# Импортируем функции и переменные из модуля db
+from db import PG_CONNECTION_STRING, init_db, update_user_balance, create_user
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PreCheckoutQueryHandler
 from openai import OpenAI
