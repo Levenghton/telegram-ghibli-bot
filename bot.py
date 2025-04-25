@@ -3,7 +3,6 @@ import io
 import logging
 import base64
 import sys
-import sqlite3
 import json
 from datetime import datetime
 import os
@@ -15,7 +14,7 @@ import asyncpg
 from datetime import datetime
 from io import BytesIO
 # Импортируем функции и переменные из модуля db
-from db import PG_CONNECTION_STRING, init_db, update_user_balance, create_user
+from db import PG_CONNECTION_STRING, init_db, get_user_balance, update_user_balance, create_user, check_balance_sufficient
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PreCheckoutQueryHandler
 from openai import OpenAI
@@ -340,7 +339,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display the main menu."""
     user_id = update.effective_user.id
-    balance = get_user_balance(user_id)
+    balance = await get_user_balance(user_id)
     
     await update.message.reply_text(
         f"Главное меню\n\n"
@@ -352,7 +351,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
     user_id = update.effective_user.id
-    balance = get_user_balance(user_id)
+    balance = await get_user_balance(user_id)
     
     await update.message.reply_text(
         "Как использовать бота:\n\n"
@@ -372,7 +371,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show user balance."""
     user_id = update.effective_user.id
-    balance = get_user_balance(user_id)
+    balance = await get_user_balance(user_id)
     
     # Create inline keyboard for balance options
     keyboard = [
@@ -393,7 +392,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
     
     user_id = query.from_user.id
-    balance = get_user_balance(user_id)
+    balance = await get_user_balance(user_id)
     
     # Проверяем, является ли сообщение фотографией (имеет поле photo)
     is_photo_message = hasattr(query.message, 'photo') and query.message.photo
@@ -781,8 +780,8 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
         
         if user_id and stars:
             # Add stars to user balance
-            update_user_balance(user_id, stars)
-            new_balance = get_user_balance(user_id)
+            await update_user_balance(user_id, stars)
+            new_balance = await get_user_balance(user_id)
             
             # Send confirmation message
             await update.message.reply_text(
@@ -812,10 +811,10 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id
     
     # Асинхронная проверка баланса
-    is_balance_sufficient = await async_check_balance_sufficient(user_id)
+    is_balance_sufficient = await check_balance_sufficient(user_id)
     
     if not is_balance_sufficient:
-        balance = await async_get_user_balance(user_id)
+        balance = await get_user_balance(user_id)
         await update.message.reply_text(
             f"У вас недостаточно звезд для генерации изображения.\n"
             f"Текущий баланс: ⭐ {balance} звезд\n"
@@ -1220,8 +1219,8 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await async_remove_file(file_path)
             
             # Асинхронно обновляем баланс пользователя
-            await async_update_user_balance(user_id, -GENERATION_COST)
-            current_balance = await async_get_user_balance(user_id)
+            await update_user_balance(user_id, -GENERATION_COST)
+            current_balance = await get_user_balance(user_id)
             
             # Создаем кнопки для добавления после генерации - строго 3 кнопки
             keyboard = [
@@ -1302,8 +1301,8 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 logger.info("Альтернативное изображение успешно создано")
                 
                 # Асинхронно обновляем баланс пользователя
-                await async_update_user_balance(user_id, -GENERATION_COST)
-                current_balance = await async_get_user_balance(user_id)
+                await update_user_balance(user_id, -GENERATION_COST)
+                current_balance = await get_user_balance(user_id)
                 
                 # Асинхронно читаем файл для отправки
                 photo_content = await async_read_file(backup_file_path)
@@ -1346,7 +1345,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка текстовых сообщений."""
     user_id = update.effective_user.id
-    balance = get_user_balance(user_id)
+    balance = await get_user_balance(user_id)
     
     # Отправляем сообщение с инструкциями
     await update.message.reply_text(
@@ -1761,8 +1760,33 @@ async def main() -> None:
         print("Бот запущен и готов к работе! Нажмите Ctrl+C для остановки.")
         logger.info("Бот успешно запущен и ждет сообщения!")
         
-        # Run the bot until you press Ctrl-C or the process receives SIGINT, SIGTERM or SIGABRT
-        application.run_polling()
+        # Запускаем бот с помощью await
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        
+        try:
+            # Запускаем бесконечный цикл, чтобы бот работал
+            while True:
+                # Проверяем свободное место на диске каждый час
+                if check_disk_space():
+                    # Если места достаточно, продолжаем работу
+                    pass
+                else:
+                    # Если места мало, выполняем экстренную очистку
+                    emergency_cleanup()
+                
+                # Спим, чтобы не загружать процессор
+                await asyncio.sleep(3600)  # 1 час
+        except KeyboardInterrupt:
+            # Закрываем пул соединений при завершении работы
+            from db import close_pool
+            await close_pool()
+            logger.info("Пул соединений PostgreSQL закрыт")
+        finally:
+            # Закрываем бот
+            await application.stop()
+            await application.shutdown()
         
     except Exception as e:
         logger.error(f"Критическая ошибка при запуске бота: {e}")
