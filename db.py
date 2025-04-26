@@ -195,9 +195,9 @@ async def create_user(user_id, username=None, first_name=None, last_name=None):
             user_exists = await conn.fetchval('SELECT COUNT(1) FROM users WHERE user_id = $1', user_id)
             
             if not user_exists:
-                # Создаем нового пользователя с начальным балансом 10 звезд
-                # (1 звезда - стандартный бонус, это позволит пользователю сразу попробовать сервис)
-                initial_balance = 10
+                # Создаем нового пользователя с начальным балансом 20 звезд
+                # Это позволит пользователю сразу попробовать больше стилей и возможностей бота
+                initial_balance = 20
                 
                 await conn.execute('''
                     INSERT INTO users(user_id, username, first_name, last_name, balance, created_at, total_generations) 
