@@ -468,7 +468,14 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle button presses."""
     query = update.callback_query
-    await query.answer()
+    
+    # Сразу отвечаем на callback-запрос, чтобы избежать ошибки "Query is too old"
+    try:
+        await query.answer()
+    except Exception as e:
+        # Если запрос уже устарел, просто логируем и продолжаем работу
+        logger.warning(f"Не удалось ответить на callback-запрос: {e}")
+        # Продолжаем обработку - даже если answer() не сработал, мы всё равно можем обработать команду
     
     user_id = query.from_user.id
     balance = await get_user_balance(user_id)
