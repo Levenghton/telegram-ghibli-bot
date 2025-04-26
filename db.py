@@ -104,7 +104,6 @@ async def init_db():
                     last_name TEXT,
                     balance INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_generation TIMESTAMP,
                     total_generations INTEGER DEFAULT 0
                 )
@@ -201,8 +200,8 @@ async def create_user(user_id, username=None, first_name=None, last_name=None):
                 initial_balance = 10
                 
                 await conn.execute('''
-                    INSERT INTO users(user_id, username, first_name, last_name, balance, created_at, updated_at, total_generations) 
-                    VALUES($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+                    INSERT INTO users(user_id, username, first_name, last_name, balance, created_at, total_generations) 
+                    VALUES($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, 0)
                 ''', user_id, username, first_name, last_name, initial_balance)
                 
                 # Кэшируем баланс нового пользователя
@@ -221,7 +220,7 @@ async def create_user(user_id, username=None, first_name=None, last_name=None):
                 # Пользователь уже существует, обновляем данные
                 await conn.execute('''
                     UPDATE users 
-                    SET username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP
+                    SET username = $2, first_name = $3, last_name = $4
                     WHERE user_id = $1
                 ''', user_id, username, first_name, last_name)
                 
@@ -263,10 +262,10 @@ async def update_user_balance(user_id, amount):
                     # Обновляем запись в базе данных
                     update_query = """
                     UPDATE users 
-                    SET balance = $1, updated_at = $2
-                    WHERE user_id = $3
+                    SET balance = $1
+                    WHERE user_id = $2
                     """
-                    await connection.execute(update_query, new_balance, datetime.now(), user_id)
+                    await connection.execute(update_query, new_balance, user_id)
                     
                     # Обновляем значение в кэше
                     update_cache(user_id, 'balance', new_balance)
