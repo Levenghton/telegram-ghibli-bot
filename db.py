@@ -147,6 +147,9 @@ async def init_db():
         await start_background_worker()
         logger.info("Запущен обработчик фоновых задач")
         
+        # Возвращаем True в случае успеха для совместимости с основным кодом
+        return True
+        
     except Exception as e:
         logger.error(f"Ошибка при инициализации базы данных: {e}")
         return False
