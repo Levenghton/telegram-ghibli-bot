@@ -17,23 +17,8 @@ from io import BytesIO
 from db import PG_CONNECTION_STRING, init_db, get_user_balance, update_user_balance, create_user, check_balance_sufficient, get_user
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PreCheckoutQueryHandler
-from telegram.error import Forbidden, BadRequest
 from openai import OpenAI
 from openai import OpenAIError
-
-async def safe_send(awaitable):
-    try: 
-        return await awaitable
-    except Forbidden: # юзер заблокировал бота
-        return None # молча игнорируем
-
-async def safe_edit(awaitable):
-    try: 
-        return await awaitable
-    except BadRequest as e: # пытаемся изменить тот же текст
-        if "Message is not modified" in str(e):
-            return None
-        raise
 
 # Создаем директории для временных файлов
 TEMP_DIR = "images/temp"
@@ -188,60 +173,6 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # Асинхронная функция для прямого вызова OpenAI API через aiohttp
 import aiohttp
 
-# Фоновая задача для генерации и отправки изображения
-async def generate_and_send_image(chat_id, image_data, prompt, context, user_id, style_name):
-    """Фоновая задача для генерации и отправки изображения без блокировки основного потока"""
-    try:
-        # Отправляем статусное сообщение
-        status = await context.bot.send_message(chat_id, f"⏳ Генерирую ваше изображение в стиле {style_name}…")
-        
-        # Запускаем периодическое обновление статуса
-        status_task = asyncio.create_task(
-            update_status_periodically(context.bot, chat_id, status.message_id)
-        )
-        
-        # Генерируем изображение
-        output = await asyncio.wait_for(async_openai_edit_image(image_data, prompt), timeout=90)
-        
-        # Отменяем задачу обновления статуса
-        status_task.cancel()
-        
-        # Списываем звезды
-        await update_user_balance(user_id, -GENERATION_COST)
-        current_balance = await get_user_balance(user_id)
-        
-        # Создаем кнопки для добавления после генерации - строго 3 кнопки
-        keyboard = [
-            [InlineKeyboardButton("Сгенерировать еще", callback_data="generate_new")],
-            [InlineKeyboardButton("Купить звезды", callback_data="topup_balance")],
-            [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Отправляем фото
-        await context.bot.send_photo(
-            chat_id=chat_id,
-            photo=output,
-            caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {GENERATION_COST} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
-            reply_markup=reply_markup
-        )
-        
-    except asyncio.TimeoutError:
-        await context.bot.send_message(chat_id, "⚠️ Генерация изображения заняла слишком много времени. Пожалуйста, попробуйте еще раз.")
-        # Возвращаем звезды в случае неудачи
-        await update_user_balance(user_id, GENERATION_COST)
-    except Exception as e:
-        logger.error(f"Ошибка при генерации изображения: {e}")
-        await context.bot.send_message(chat_id, f"❌ Ошибка при генерации изображения. Попробуйте еще раз.")
-        # Возвращаем звезды в случае неудачи
-        await update_user_balance(user_id, GENERATION_COST)
-    finally:
-        # Удаляем статусное сообщение
-        try: 
-            await context.bot.delete_message(chat_id, status.message_id)
-        except Exception as msg_error:
-            logger.warning(f"Не удалось удалить статусное сообщение: {msg_error}")
-
 async def async_openai_edit_image(image_data: bytes, prompt: str) -> bytes:
     """Асинхронный HTTP-запрос к OpenAI Images API через aiohttp."""
     url = "https://api.openai.com/v1/images/edits"
@@ -274,7 +205,7 @@ async def async_openai_edit_image(image_data: bytes, prompt: str) -> bytes:
         raise
 
 # Функция для периодического обновления статуса генерации изображения
-async def update_status_periodically(bot, chat_id, message_id, interval=15):
+async def update_status_periodically(bot, chat_id, message_id, interval=5):
     """Периодически обновляет статусное сообщение во время генерации."""
     status_emojis = ["⏱", "⏲", "⏳", "⌛"]
     status_texts = [
@@ -288,23 +219,20 @@ async def update_status_periodically(bot, chat_id, message_id, interval=15):
     i = 0
     try:
         while True:
-            # Сначала делаем задержку перед обновлением
-            await asyncio.sleep(interval)  # Обновляем статус каждые 15 секунд
-            
             status_emoji = status_emojis[i % len(status_emojis)]
             status_text = status_texts[i % len(status_texts)]
             
             try:
-                # Используем safe_edit вместо прямого вызова
-                await safe_edit(bot.edit_message_text(
+                await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"{status_emoji} {status_text}"
-                ))
+                )
             except Exception as e:
                 logger.warning(f"Не удалось обновить статус: {e}")
             
             i += 1
+            await asyncio.sleep(interval)  # Обновляем статус каждые N секунд
     except asyncio.CancelledError:
         # Задача была отменена, выходим из цикла
         pass
@@ -378,7 +306,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "<a href='https://telegra.ph/USLOVIYA-ISPOLZOVANIYA-04-05'>Условиями использования</a>"
     )
     
-    await safe_send(update.message.reply_html(welcome_text, disable_web_page_preview=True))
+    await update.message.reply_html(welcome_text, disable_web_page_preview=True)
     
     # Send demo images as a group
     demo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
@@ -406,17 +334,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Send media group
     if media_group:
         try:
-            await safe_send(context.bot.send_media_group(
+            await context.bot.send_media_group(
                 chat_id=update.effective_chat.id, 
                 media=media_group
-            ))
+            )
             
             # Отправляем сообщение с призывом к действию и меню после демо изображений
             action_message = (
                 "🔮 Отправьте фото для генерации изображения в выбранном стиле.\n\n"
                 "🌟 Приглашайте друзей и получайте 50% от их покупок в виде звёзд."
             )
-            await safe_send(update.message.reply_text(action_message, reply_markup=create_main_menu()))
+            await update.message.reply_text(action_message, reply_markup=create_main_menu())
             
         except Exception as e:
             logger.error(f"Error sending demo images: {e}")
@@ -425,11 +353,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 file_path = os.path.join(demo_dir, file_name)
                 try:
                     with open(file_path, 'rb') as photo:
-                        await safe_send(context.bot.send_photo(
+                        await context.bot.send_photo(
                             chat_id=update.effective_chat.id,
                             photo=photo,
                             caption=caption
-                        ))
+                        )
                 except Exception as e:
                     logger.error(f"Error sending individual demo image {file_name}: {e}")
 
@@ -438,19 +366,19 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user_id = update.effective_user.id
     balance = await get_user_balance(user_id)
     
-    await safe_send(update.message.reply_text(
+    await update.message.reply_text(
         f"Главное меню\n\n"
         f"Ваш текущий баланс: ⭐ {balance} звезд\n"
         f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
         reply_markup=create_main_menu()
-    ))
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
     user_id = update.effective_user.id
     balance = await get_user_balance(user_id)
     
-    await safe_send(update.message.reply_text(
+    await update.message.reply_text(
         "Как использовать бота:\n\n"
         "1. Отправьте фотографию или нажмите кнопку 'Сгенерировать изображение'\n"
         "2. Подождите немного, пока я обрабатываю изображение\n"
@@ -463,7 +391,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/balance - Проверить баланс\n"
         "/help - Эта справка",
         reply_markup=create_main_menu()
-    ))
+    )
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show user balance."""
@@ -477,24 +405,17 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await safe_send(update.message.reply_text(
+    await update.message.reply_text(
         f"Ваш текущий баланс: ⭐ {balance} звезд\n"
         f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
         reply_markup=reply_markup
-    ))
+    )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle button presses."""
     query = update.callback_query
+    await query.answer()
     
-    # Мгновенно отвечаем на callback-запрос
-    await safe_send(query.answer())
-    
-    # Запускаем обработку в фоновом режиме
-    context.application.create_task(handle_button_logic(query, context))
-
-async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle button logic in background."""
     user_id = query.from_user.id
     balance = await get_user_balance(user_id)
     
@@ -515,10 +436,10 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await safe_edit(query.edit_message_text(
+        await query.edit_message_text(
             text="Выберите стиль для вашего изображения:",
             reply_markup=reply_markup
-        ))
+        )
     
     elif query.data == "check_balance":
         # Create inline keyboard for balance options
@@ -528,11 +449,11 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await safe_edit(query.edit_message_text(
+        await query.edit_message_text(
             text=f"Ваш текущий баланс: ⭐ {balance} звезд\n"
                 f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
             reply_markup=reply_markup
-        ))
+        )
     
     elif query.data == "use_my_name":
         # Обработка кнопки "Использовать моё имя"
@@ -551,7 +472,7 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
         balance = get_user_balance(user_id)
         balance_text = f"Стоимость: ⭐ {GENERATION_COST} звезд | Ваш баланс: ⭐ {balance} звезд"
         
-        await safe_edit(query.edit_message_text(
+        await query.edit_message_text(
             text=f"🔮 Отлично! Имя для гравировки: <b>{user_name}</b>\n\n"
                  f"Теперь укажите аксессуары для вашей игрушки в следующем сообщении.\n"
                  f"Например: солнцезащитные очки, микрофон, гитара\n\n"
@@ -560,7 +481,7 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
                 [InlineKeyboardButton("Отменить", callback_data="generate_image")]
             ]),
             parse_mode="HTML"
-        ))
+        )
         return
         
     elif query.data == "topup_balance":
@@ -570,17 +491,17 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            await safe_send(context.bot.send_message(
+            await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=topup_text,
                 reply_markup=create_topup_menu()
-            ))
+            )
         else:
             # Если это обычное сообщение, редактируем его
-            await safe_edit(query.edit_message_text(
+            await query.edit_message_text(
                 text=topup_text,
                 reply_markup=create_topup_menu()
-            ))
+            )
     
     elif query.data.startswith("buy_stars_"):
         stars_amount = int(query.data.split("_")[2])
@@ -615,7 +536,7 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
             
             try:
                 # Отправляем счет на оплату
-                await safe_send(context.bot.send_invoice(
+                await context.bot.send_invoice(
                     chat_id=user_id,
                     title=title,
                     description=description,
@@ -629,21 +550,21 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
                     need_shipping_address=False,
                     is_flexible=False,
                     start_parameter="pay"  # Добавляем start_parameter для правильной обработки
-                ))
+                )
                 
-                await safe_edit(query.edit_message_text(
+                await query.edit_message_text(
                     text=f"Счет на оплату {stars_amount} звезд создан. Пожалуйста, оплатите его, чтобы пополнить баланс.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
-                ))
+                )
                 
                 # Логируем успешное создание счета
                 logger.info(f"Счет на оплату {stars_amount} звезд успешно создан для пользователя {user_id}")
             except Exception as e:
                 logger.error(f"Ошибка при создании счета: {e}")
-                await safe_edit(query.edit_message_text(
+                await query.edit_message_text(
                     text=f"Произошла ошибка при создании счета. Пожалуйста, попробуйте позже.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
-                ))
+                )
 
     elif query.data == "invite_friend":
         # Сообщение с инструкциями по партнерской программе
@@ -656,13 +577,13 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         
         # Редактируем существующее сообщение
-        await safe_edit(query.edit_message_text(
+        await query.edit_message_text(
             text=message,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
-        ))
+        )
         
     elif query.data == "help":
-        await safe_edit(query.edit_message_text(
+        await query.edit_message_text(
             text="Как использовать бота:\n\n"
                 "1. Отправьте фотографию или нажмите кнопку 'Сгенерировать изображение'\n"
                 "2. Выберите желаемый стиль (различные варианты доступны)\n"
@@ -678,7 +599,7 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
                 "/balance - Проверить баланс\n"
                 "/help - Эта справка",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
-        ))
+        )
     
     elif query.data.startswith("style_"):
         # Обработка выбора стиля
@@ -730,7 +651,7 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
                 context.user_data['user_data']['waiting_for_toy_name'] = True
                 
                 # Отправляем сообщение с просьбой указать имя для гравировки
-                await safe_edit(query.edit_message_text(
+                await query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                          f"Сначала укажите имя для гравировки на коробке игрушки.\n"
                          f"Это имя будет выгравировано на упаковке.\n\n"
@@ -740,16 +661,16 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
                         [InlineKeyboardButton("Отменить", callback_data="generate_image")]
                     ]),
                     parse_mode="HTML"
-                ))
+                )
             else:
                 # Если недостаточно средств, отправляем стандартное сообщение о недостатке средств
-                await safe_edit(query.edit_message_text(
+                await query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                          f"{action_text}\n\n"
                          f"{balance_text}",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="HTML"
-                ))
+                )
             return
             
         # Проверяем, выбран ли стиль "Свой стиль"
@@ -760,7 +681,7 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
             # Проверяем, достаточно ли средств у пользователя
             if balance_sufficient:
                 # Отправляем сообщение с просьбой описать желаемый стиль
-                await safe_edit(query.edit_message_text(
+                await query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                          f"Пожалуйста, опишите желаемый стиль в следующем сообщении.\n"
                          f"Например: В стиле персонажа SIMS с зеленым ромбом над головой!\n\n"
@@ -769,27 +690,27 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
                         [InlineKeyboardButton("Отменить", callback_data="generate_image")]
                     ]),
                     parse_mode="HTML"
-                ))
+                )
             else:
                 # Если недостаточно средств, отправляем стандартное сообщение о недостатке средств
-                await safe_edit(query.edit_message_text(
+                await query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                          f"{action_text}\n\n"
                          f"{balance_text}",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="HTML"
-                ))
+                )
             return
         
         # Для всех остальных стилей отправляем стандартное сообщение
         # Отправляем новое сообщение с инструкцией и призывом к действию
-        await safe_edit(query.edit_message_text(
+        await query.edit_message_text(
             text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                  f"{action_text}\n\n"
                  f"{balance_text}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
-        ))
+        )
         
         logger.info(f"Пользователь {user_id} выбрал стиль: {style_name}")
     
@@ -811,17 +732,17 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            await safe_send(context.bot.send_message(
+            await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="Выберите стиль для вашего изображения:",
                 reply_markup=reply_markup
-            ))
+            )
         else:
             # Если это обычное сообщение, редактируем его
-            await safe_edit(query.edit_message_text(
+            await query.edit_message_text(
                 text="Выберите стиль для вашего изображения:",
                 reply_markup=reply_markup
-            ))
+            )
     
     elif query.data == "back_to_menu":
         menu_text = f"Главное меню\n\n"\
@@ -831,17 +752,17 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            await safe_send(context.bot.send_message(
+            await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=menu_text,
                 reply_markup=create_main_menu()
-            ))
+            )
         else:
             # Если это обычное сообщение, редактируем его
-            await safe_edit(query.edit_message_text(
+            await query.edit_message_text(
                 text=menu_text,
                 reply_markup=create_main_menu()
-            ))
+            )
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the pre-checkout callback."""
@@ -910,10 +831,115 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
             reply_markup=create_main_menu()
         )
 
+async def generate_and_send_image(chat_id: int, image_data: bytes, prompt: str,
+                                 context: ContextTypes.DEFAULT_TYPE,
+                                 generation_cost: int, user_id: int, style_name: str,
+                                 file_path: str = None) -> None:
+    """Асинхронная функция для фоновой генерации и отправки изображения."""
+    try:
+        # Отправляем первое сообщение-статус
+        status_message = await context.bot.send_message(
+            chat_id=chat_id, 
+            text=f"⏳ Генерирую ваше изображение в стиле {style_name}..."
+        )
+        
+        # Запускаем периодическое обновление статуса
+        status_update_task = asyncio.create_task(
+            update_status_periodically(context.bot, chat_id, status_message.message_id)
+        )
+        
+        try:
+            # Долгий асинхронный HTTP-запрос к OpenAI API
+            output_image_data = await asyncio.wait_for(
+                async_openai_edit_image(image_data, prompt),
+                timeout=90  # Таймаут 90 секунд
+            )
+            
+            # Отмена задачи обновления статуса
+            status_update_task.cancel()
+            
+            # Списываем стоимость генерации
+            await update_user_balance(user_id, -generation_cost)
+            current_balance = await get_user_balance(user_id)
+            
+            # Создаем клавиатуру для сообщения с результатом
+            keyboard = [
+                [InlineKeyboardButton("Сгенерировать еще", callback_data="generate_new")],
+                [InlineKeyboardButton("Купить звезды", callback_data="topup_balance")],
+                [InlineKeyboardButton("Главное меню", callback_data="back_to_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Сохраняем временно для отправки
+            import time
+            generated_file_path = f"images/temp/generated_{user_id}_{int(time.time())}.png"
+            with open(generated_file_path, "wb") as f:
+                f.write(output_image_data)
+                
+            # Отправляем изображение пользователю
+            with open(generated_file_path, 'rb') as photo_file:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo_file,
+                    caption=f"Ваше изображение в стиле {style_name}! 🌟\n\nСписано: ⭐ {generation_cost} звезд\nТекущий баланс: ⭐ {current_balance} звезд",
+                    reply_markup=reply_markup
+                )
+                
+            # Удаляем временные файлы
+            try:
+                os.remove(generated_file_path)
+                if file_path and os.path.exists(file_path):
+                    os.remove(file_path)
+            except Exception as e:
+                logger.warning(f"Ошибка при удалении временных файлов: {e}")
+                
+            # Удаляем статусное сообщение
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=status_message.message_id)
+            except Exception as e:
+                logger.warning(f"Не удалось удалить статусное сообщение: {e}")
+                
+        except asyncio.TimeoutError:
+            # Отменяем задачу обновления статуса в случае таймаута
+            status_update_task.cancel()
+            
+            # Сообщаем пользователю о таймауте
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_message.message_id,
+                text="⚠️ Генерация изображения заняла слишком много времени. Пожалуйста, попробуйте еще раз."
+            )
+            
+        except Exception as e:
+            # Отменяем задачу обновления статуса в случае ошибки
+            status_update_task.cancel()
+            
+            # Логируем ошибку и сообщаем пользователю
+            logger.error(f"Ошибка при генерации изображения: {e}")
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_message.message_id,
+                text=f"❌ Ошибка при генерации изображения. Попробуйте еще раз."
+            )
+    except Exception as e:
+        logger.error(f"Критическая ошибка в фоновой задаче: {e}")
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ Произошла ошибка при обработке запроса."
+            )
+        except Exception:
+            pass
+    finally:
+        # Удаляем временный файл, если он все еще существует
+        try:
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+
 async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Process a photo and convert it to the selected style."""
-    # Добавляем измерение времени для логгирования
-    update._ts = time.time()
     user_id = update.effective_user.id
     
     # Асинхронная проверка баланса
@@ -921,11 +947,11 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     if not is_balance_sufficient:
         balance = await get_user_balance(user_id)
-        await safe_send(update.message.reply_text(
+        await update.message.reply_text(
             f"У вас недостаточно звезд для генерации изображения.\n"
             f"Текущий баланс: ⭐ {balance} звезд\n"
             f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n"
-        ))
+        )
         return
     
     # Get selected style from user data if available
@@ -965,20 +991,8 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     style_name = style_display_names.get(selected_style, "выбранном стиле")
     
-    # Создаем список разнообразных статусных сообщений
-    status_messages = [
-        f"Обрабатываю ваше изображение в стиле {style_name}... ⏳",
-        f"Запускаю магию изображений в стиле {style_name}...",
-        f"Что-то интересное получается в стиле {style_name}...",
-        f"Искусственный интеллект рисует вас в стиле {style_name}...",
-        f"Цифровые художники уже создают ваш портрет в стиле {style_name}...",
-        f"Собираю пиксели для вашего изображения в стиле {style_name}...",
-        f"Нейросети очень стараются создать ваш образ в стиле {style_name}..."
-    ]
-    
-    # Выбираем случайное сообщение
-    import random
-    status_message = await update.message.reply_text(random.choice(status_messages))
+    # Сообщаем пользователю, что запрос принят
+    await update.message.reply_text(f"🔄 Ваш запрос принят! Генерирую изображение в стиле {style_name}...")
     
     try:
         # Get the photo with the highest resolution
@@ -1001,32 +1015,8 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await async_save_file(file_path, photo_bytes)
         
         logger.info(f"Обработка изображения для пользователя {update.effective_user.id} в стиле {style_name}")
-        # Создаем список разнообразных сообщений для фазы создания
-        creation_messages = [
-            f"Создаю изображение в стиле {style_name}... 🎨",
-            f"Достаю краски и кисти для вашего портрета в стиле {style_name}... 🧁",
-            f"Делаю из вас персонажа в стиле {style_name}... 🌠",
-            f"Художественная магия превращает вас в стиль {style_name}... ✨",
-            f"Делаю вас звездой в стиле {style_name}... 🌟",
-            f"Нейросеть творит чудеса в стиле {style_name}... 💫",
-            f"Наношу последние штрихи на изображение в стиле {style_name}... 🎨"
-        ]
         
-        analysis_messages = [
-            "Анализирую ваше фото... 🔍",
-            "Изучаю детали вашего лица... 👀",
-            "Распознаю черты лица... 👤",
-            "Ищу ваши уникальные особенности... 🧐",
-            "Записываю все ваши характерные черты... 📝"
-        ]
-        
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id,
-            message_id=status_message.message_id,
-            text=random.choice(creation_messages)
-        )
-        
-        # Выбираем промпт в зависимости от выбранного стиля
+        # Выбираем промпт для генерации в зависимости от выбранного стиля
         if selected_style == "ghibli":
             prompt = """
             Transform this person into a Studio Ghibli animation character. 
@@ -1135,51 +1125,116 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             Include some Ghibli-style environment elements that complement the character.
             """
         
+        # Определяем, что делать в случае своего стиля без описания
+        if selected_style == "custom" and ('user_data' not in context.user_data or 'custom_style' not in context.user_data['user_data']):
+            # Если пользователь выбрал свой стиль, но не указал описание
+            context.user_data['user_data']['photo_file_path'] = file_path
+            await update.message.reply_text(
+                "Пожалуйста, опишите желаемый стиль в текстовом сообщении."
+            )
+            
+            # Сохраняем информацию о том, что пользователь выбрал свой стиль
+            context.user_data['user_data']['waiting_for_custom_style'] = True
+            return
+        
         # Подготовим файл изображения для передачи в OpenAI API
         with open(file_path, "rb") as img_file:
             image_data = img_file.read()
         
-        # Отменяем статусное сообщение, оно будет создано в фоновой задаче
-        try:
-            await context.bot.delete_message(
-                chat_id=update.effective_chat.id,
-                message_id=status_message.message_id
-            )
-        except Exception as msg_error:
-            logger.warning(f"Не удалось удалить статусное сообщение: {msg_error}")
-        
-        # Списываем звёзды сразу (будут возвращены при ошибке)
-        await update_user_balance(user_id, -GENERATION_COST)
-        context.user_data['was_charged'] = True  # Отмечаем, что списание произошло
-        
-        # Запускаем фоновую задачу для генерации изображения
-        style_name = style_display_names.get(selected_style, "выбранном стиле")
+        # Запускаем фоновую задачу генерации изображения
         asyncio.create_task(
             generate_and_send_image(
-                update.effective_chat.id,
-                image_data,
-                prompt,
-                context,
-                user_id,
-                style_name
+                chat_id=update.effective_chat.id,
+                image_data=image_data,
+                prompt=prompt,
+                context=context,
+                generation_cost=GENERATION_COST,
+                user_id=user_id,
+                style_name=style_name,
+                file_path=file_path
             )
         )
         
-        # Удаляем временный файл
-        try:
-            os.remove(file_path)
-            logger.info(f"Временный файл {file_path} удален")
-        except Exception as file_error:
-            logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
-            
-        # Сразу возвращаемся из функции, чтобы не блокировать цикл событий
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"Делаю ваше изображение в стиле {style_name}. Я пришлю результат, как только он будет готов! 💫"  
+        # Сразу возвращаемся для обработки других запросов
+        return
+        
+    except Exception as e:
+            generate_and_send_image(
+                chat_id=update.effective_chat.id,
+                image_data=image_data,
+                prompt=prompt,
+                context=context,
+                generation_cost=GENERATION_COST,
+                user_id=user_id,
+                style_name=style_name,
+                file_path=file_path
+            )
         )
         
-        # Выходим сразу, не ждем ответа от API
+        # Сразу возвращаемся из функции, чтобы не блокировать обработчик
         return
+    
+    except Exception as e:
+            status_update_task.cancel()
+            
+            # Сообщаем пользователю о таймауте
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=status_message.message_id,
+                text="\u26a0️ Генерация изображения заняла слишком много времени. Пожалуйста, попробуйте еще раз."
+            )
+            
+            # Проверяем, было ли списание звезд
+            if context.user_data.get('was_charged', False):
+                # Возвращаем баланс пользователю
+                await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
+                logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за таймаута")
+                # Сбрасываем флаг списания
+                context.user_data['was_charged'] = False
+                
+            # Удаляем временный файл
+            try:
+                os.remove(file_path)
+                logger.info(f"Временный файл {file_path} удален после таймаута")
+            except Exception as file_error:
+                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
+                
+            return  # Выходим из функции в случае таймаута
+        except Exception as e:
+            # Отменяем задачу обновления статуса
+            status_update_task.cancel()
+            
+            # Сообщаем пользователю об ошибке
+            logger.error(f"Ошибка при генерации изображения: {e}")
+            
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=status_message.message_id,
+                text=f"Ошибка при генерации изображения. Попробуйте еще раз или выберите другой стиль."
+            )
+            
+            # Проверяем, было ли списание звезд
+            if context.user_data.get('was_charged', False):
+                try:
+                    # Возвращаем баланс ТОЛЬКО если он был списан
+                    await update_user_balance(user_id, GENERATION_COST)  # Возвращаем баланс
+                    logger.info(f"Пользователю {user_id} возвращено {GENERATION_COST} звезд из-за ошибки генерации")
+                    # Сбрасываем флаг списания
+                    context.user_data['was_charged'] = False
+                except Exception as refund_error:
+                    logger.error(f"Ошибка при возврате баланса: {refund_error}")
+            
+            # Удаляем временный файл
+            try:
+                os.remove(file_path)
+                logger.info(f"Временный файл {file_path} удален после ошибки")
+            except Exception as file_error:
+                logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
+            
+            return  # Выходим из функции в случае ошибки
+        
+        # Отменяем обновление статуса, т.к. изображение успешно сгенерировано
+        status_update_task.cancel()
         
         # Сохраняем изображение во временный файл для отправки
         # output_image_data уже содержит декодированные байты изображения
@@ -1600,8 +1655,6 @@ def setup_scheduled_tasks(updater):
 
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages."""
-    # Добавляем измерение времени для логгирования 
-    update._ts = time.time()
     # Проверяем, что update и update.message не None
     if update and update.message:
         # Получаем user_id для проверки в базе данных
@@ -1619,13 +1672,13 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             
             # Отправляем сообщение с просьбой указать аксессуары
             balance = await get_user_balance(user_id)
-            await safe_send(update.message.reply_text(
+            await update.message.reply_text(
                 f"🔮 Отлично! Имя для гравировки: <b>{custom_name}</b>\n\n"
                 f"Теперь укажите аксессуары для вашей игрушки в следующем сообщении.\n"
                 f"Например: солнцезащитные очки, микрофон, гитара\n\n"
                 f"Стоимость: ⭐ {GENERATION_COST} звезд | Ваш баланс: ⭐ {balance} звезд",
                 parse_mode="HTML"
-            ))
+            )
             return
             
         # Проверяем, ждет ли бот ввода аксессуаров для стиля "Игрушка"
@@ -1640,9 +1693,9 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 file_path = context.user_data['user_data']['photo_file_path']
                 
                 # Отправляем сообщение о начале генерации
-                status_message = await safe_send(update.message.reply_text(
+                status_message = await update.message.reply_text(
                     f"Начинаю создавать игрушку с аксессуарами: {accessories}..."
-                ))
+                )
                 
                 # Запускаем функцию обработки фото с сохраненными параметрами
                 # Создаем фиктивный объект с фото
@@ -1657,15 +1710,15 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 # Здесь нужно добавить код для генерации изображения
                 # Но поскольку у нас нет прямого доступа к функции process_photo с файлом,
                 # мы можем предложить пользователю отправить фото еще раз
-                await safe_send(update.message.reply_text(
+                await update.message.reply_text(
                     "Пожалуйста, отправьте фото еще раз, чтобы я мог создать игрушку с указанными аксессуарами."
-                ))
+                )
                 return
             
             # Если нет сохраненного пути к фото, просим отправить фото
-            await safe_send(update.message.reply_text(
+            await update.message.reply_text(
                 "Теперь, пожалуйста, отправьте фотографию, которую хотите превратить в игрушку."
-            ))
+            )
             return
             
         # Проверяем, ждет ли бот описания для "Своего стиля"
@@ -1680,9 +1733,9 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 file_path = context.user_data['user_data']['photo_file_path']
                 
                 # Отправляем сообщение о начале генерации
-                status_message = await safe_send(update.message.reply_text(
+                status_message = await update.message.reply_text(
                     f"Начинаю создавать изображение в стиле: {custom_style}..."
-                ))
+                )
                 
                 # Запускаем генерацию изображения в пользовательском стиле
                 context.user_data['user_data']['selected_style'] = "custom"
@@ -1690,15 +1743,15 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 # Здесь нужно добавить код для генерации изображения
                 # Но поскольку у нас нет прямого доступа к функции process_photo с файлом,
                 # мы можем предложить пользователю отправить фото еще раз
-                await safe_send(update.message.reply_text(
+                await update.message.reply_text(
                     "Пожалуйста, отправьте фото еще раз, чтобы я мог создать изображение в указанном стиле."
-                ))
+                )
                 return
             
             # Если нет сохраненного пути к фото, просим отправить фото
-            await safe_send(update.message.reply_text(
+            await update.message.reply_text(
                 "Теперь, пожалуйста, отправьте фотографию, которую хотите стилизовать."
-            ))
+            )
             return
 
         # Если пользователь отправил сообщение до использования /start
@@ -1810,67 +1863,34 @@ async def main() -> None:
         application = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).connect_timeout(30).build()
         logger.info(f"Бот инициализирован с токеном: {TELEGRAM_TOKEN[:5]}...")
 
-        # Декоратор для измерения времени обработки апдейтов
-        def log_processing_time(handler):
-            async def wrapper(update, context, *args, **kwargs):
-                # Проверяем, есть ли временная метка на начало обработки
-                start_time = getattr(update, '_ts', time.time())
-                try:
-                    # Вызываем оригинальный обработчик
-                    result = await handler(update, context, *args, **kwargs)
-                    # Логируем время в конце успешной обработки
-                    processing_time = (time.time() - start_time) * 1000  # в мс
-                    update_type = 'unknown'
-                    if update.message:
-                        update_type = 'message'
-                    elif update.callback_query:
-                        update_type = 'callback'
-                    elif update.edited_message:
-                        update_type = 'edited_message'
-                    
-                    logger.info(f'Обработка {update_type} заняла {processing_time:.1f} мс')
-                    return result
-                except Exception as e:
-                    # Если произошла ошибка, тоже логируем время
-                    processing_time = (time.time() - start_time) * 1000
-                    logger.error(f'Ошибка при обработке: {e}, время: {processing_time:.1f} мс')
-                    raise
-            return wrapper
-            
         # Регистрируем обработчик ошибок
         async def error_handler(update, context):
-            # Проверяем, есть ли временная метка на начало обработки
-            if update and hasattr(update, '_ts'):
-                processing_time = (time.time() - update._ts) * 1000  # в мс
-                logger.error(f"Ошибка при обработке обновления: {context.error}, время: {processing_time:.1f} мс")
-            else:
-                logger.error(f"Ошибка при обработке обновления: {context.error}")
-            
+            logger.error(f"Ошибка при обработке обновления: {context.error}")
             if update:
                 logger.error(f"Обновление, вызвавшее ошибку: {update}")
                 
         application.add_error_handler(error_handler)
         
-        # Add handlers with processing time logging
-        application.add_handler(CommandHandler("start", log_processing_time(start)))
+        # Add handlers
+        application.add_handler(CommandHandler("start", start))
         logger.info("Зарегистрирован обработчик /start")
         
-        application.add_handler(CommandHandler("menu", log_processing_time(menu_command)))
+        application.add_handler(CommandHandler("menu", menu_command))
         logger.info("Зарегистрирован обработчик /menu")
         
-        application.add_handler(CommandHandler("help", log_processing_time(help_command)))
+        application.add_handler(CommandHandler("help", help_command))
         logger.info("Зарегистрирован обработчик /help")
         
-        application.add_handler(CommandHandler("balance", log_processing_time(balance_command)))
+        application.add_handler(CommandHandler("balance", balance_command))
         logger.info("Зарегистрирован обработчик /balance")
         
-        application.add_handler(CallbackQueryHandler(log_processing_time(button_handler)))
+        application.add_handler(CallbackQueryHandler(button_handler))
         logger.info("Зарегистрирован обработчик для кнопок")
         
-        application.add_handler(MessageHandler(filters.PHOTO, log_processing_time(process_photo)))
+        application.add_handler(MessageHandler(filters.PHOTO, process_photo))
         logger.info("Зарегистрирован обработчик для фотографий")
         
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_processing_time(text_message)))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
         logger.info("Зарегистрирован обработчик для текстовых сообщений")
         
         # Add payment handlers
@@ -1908,12 +1928,7 @@ async def main() -> None:
         # Запускаем бот с помощью await
         await application.initialize()
         await application.start()
-        await application.updater.start_polling(
-            timeout=3,  # long-poll ≤ 3 c
-            poll_interval=0,  # без искусственной паузы
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
+        await application.updater.start_polling()
         
         try:
             # Запускаем бесконечный цикл, чтобы бот работал
