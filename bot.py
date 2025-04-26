@@ -912,8 +912,7 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
 
 async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Process a photo and convert it to the selected style."""
-    # Добавляем измерение времени для логгирования
-    update._ts = time.time()
+    # Декоратор log_processing_time теперь сам измеряет время выполнения
     user_id = update.effective_user.id
     
     # Асинхронная проверка баланса
@@ -1600,8 +1599,7 @@ def setup_scheduled_tasks(updater):
 
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages."""
-    # Добавляем измерение времени для логгирования 
-    update._ts = time.time()
+    # Декоратор log_processing_time теперь сам измеряет время выполнения
     # Проверяем, что update и update.message не None
     if update and update.message:
         # Получаем user_id для проверки в базе данных
@@ -1810,30 +1808,33 @@ async def main() -> None:
         application = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).connect_timeout(30).build()
         logger.info(f"Бот инициализирован с токеном: {TELEGRAM_TOKEN[:5]}...")
 
-        # Декоратор для измерения времени обработки апдейтов
+        # Простой декоратор для измерения времени выполнения
         def log_processing_time(handler):
             async def wrapper(update, context, *args, **kwargs):
-                # Всегда устанавливаем временную метку при запуске обработчика
+                # Просто запоминаем время начала
                 start_time = time.time()
-                # Устанавливаем метку в объект update, если она понадобится в обработчике
-                update._ts = start_time
+                
                 try:
                     # Вызываем оригинальный обработчик
                     result = await handler(update, context, *args, **kwargs)
-                    # Логируем время в конце успешной обработки
+                    
+                    # Рассчитываем время выполнения
                     processing_time = (time.time() - start_time) * 1000  # в мс
+                    
+                    # Определяем тип обновления
                     update_type = 'unknown'
-                    if update.message:
+                    if hasattr(update, 'message') and update.message:
                         update_type = 'message'
-                    elif update.callback_query:
+                    elif hasattr(update, 'callback_query') and update.callback_query:
                         update_type = 'callback'
-                    elif update.edited_message:
+                    elif hasattr(update, 'edited_message') and update.edited_message:
                         update_type = 'edited_message'
                     
+                    # Логируем результат
                     logger.info(f'Обработка {update_type} заняла {processing_time:.1f} мс')
                     return result
                 except Exception as e:
-                    # Если произошла ошибка, тоже логируем время
+                    # В случае ошибки тоже логируем время
                     processing_time = (time.time() - start_time) * 1000
                     logger.error(f'Ошибка при обработке: {e}, время: {processing_time:.1f} мс')
                     raise
