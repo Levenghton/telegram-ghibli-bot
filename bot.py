@@ -17,8 +17,23 @@ from io import BytesIO
 from db import PG_CONNECTION_STRING, init_db, get_user_balance, update_user_balance, create_user, check_balance_sufficient, get_user
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PreCheckoutQueryHandler
+from telegram.error import Forbidden, BadRequest
 from openai import OpenAI
 from openai import OpenAIError
+
+async def safe_send(awaitable):
+    try: 
+        return await awaitable
+    except Forbidden: # юзер заблокировал бота
+        return None # молча игнорируем
+
+async def safe_edit(awaitable):
+    try: 
+        return await awaitable
+    except BadRequest as e: # пытаемся изменить тот же текст
+        if "Message is not modified" in str(e):
+            return None
+        raise
 
 # Создаем директории для временных файлов
 TEMP_DIR = "images/temp"
@@ -259,7 +274,7 @@ async def async_openai_edit_image(image_data: bytes, prompt: str) -> bytes:
         raise
 
 # Функция для периодического обновления статуса генерации изображения
-async def update_status_periodically(bot, chat_id, message_id, interval=5):
+async def update_status_periodically(bot, chat_id, message_id, interval=15):
     """Периодически обновляет статусное сообщение во время генерации."""
     status_emojis = ["⏱", "⏲", "⏳", "⌛"]
     status_texts = [
@@ -273,20 +288,23 @@ async def update_status_periodically(bot, chat_id, message_id, interval=5):
     i = 0
     try:
         while True:
+            # Сначала делаем задержку перед обновлением
+            await asyncio.sleep(interval)  # Обновляем статус каждые 15 секунд
+            
             status_emoji = status_emojis[i % len(status_emojis)]
             status_text = status_texts[i % len(status_texts)]
             
             try:
-                await bot.edit_message_text(
+                # Используем safe_edit вместо прямого вызова
+                await safe_edit(bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"{status_emoji} {status_text}"
-                )
+                ))
             except Exception as e:
                 logger.warning(f"Не удалось обновить статус: {e}")
             
             i += 1
-            await asyncio.sleep(interval)  # Обновляем статус каждые N секунд
     except asyncio.CancelledError:
         # Задача была отменена, выходим из цикла
         pass
@@ -388,17 +406,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Send media group
     if media_group:
         try:
-            await context.bot.send_media_group(
+            await safe_send(context.bot.send_media_group(
                 chat_id=update.effective_chat.id, 
                 media=media_group
-            )
+            ))
             
             # Отправляем сообщение с призывом к действию и меню после демо изображений
             action_message = (
                 "🔮 Отправьте фото для генерации изображения в выбранном стиле.\n\n"
                 "🌟 Приглашайте друзей и получайте 50% от их покупок в виде звёзд."
             )
-            await update.message.reply_text(action_message, reply_markup=create_main_menu())
+            await safe_send(update.message.reply_text(action_message, reply_markup=create_main_menu()))
             
         except Exception as e:
             logger.error(f"Error sending demo images: {e}")
@@ -407,11 +425,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 file_path = os.path.join(demo_dir, file_name)
                 try:
                     with open(file_path, 'rb') as photo:
-                        await context.bot.send_photo(
+                        await safe_send(context.bot.send_photo(
                             chat_id=update.effective_chat.id,
                             photo=photo,
                             caption=caption
-                        )
+                        ))
                 except Exception as e:
                     logger.error(f"Error sending individual demo image {file_name}: {e}")
 
@@ -420,19 +438,19 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user_id = update.effective_user.id
     balance = await get_user_balance(user_id)
     
-    await update.message.reply_text(
+    await safe_send(update.message.reply_text(
         f"Главное меню\n\n"
         f"Ваш текущий баланс: ⭐ {balance} звезд\n"
         f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
         reply_markup=create_main_menu()
-    )
+    ))
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
     user_id = update.effective_user.id
     balance = await get_user_balance(user_id)
     
-    await update.message.reply_text(
+    await safe_send(update.message.reply_text(
         "Как использовать бота:\n\n"
         "1. Отправьте фотографию или нажмите кнопку 'Сгенерировать изображение'\n"
         "2. Подождите немного, пока я обрабатываю изображение\n"
@@ -445,7 +463,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/balance - Проверить баланс\n"
         "/help - Эта справка",
         reply_markup=create_main_menu()
-    )
+    ))
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show user balance."""
@@ -459,24 +477,24 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
+    await safe_send(update.message.reply_text(
         f"Ваш текущий баланс: ⭐ {balance} звезд\n"
         f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
         reply_markup=reply_markup
-    )
+    ))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle button presses."""
     query = update.callback_query
     
-    # Сразу отвечаем на callback-запрос, чтобы избежать ошибки "Query is too old"
-    try:
-        await query.answer()
-    except Exception as e:
-        # Если запрос уже устарел, просто логируем и продолжаем работу
-        logger.warning(f"Не удалось ответить на callback-запрос: {e}")
-        # Продолжаем обработку - даже если answer() не сработал, мы всё равно можем обработать команду
+    # Мгновенно отвечаем на callback-запрос
+    await safe_send(query.answer())
     
+    # Запускаем обработку в фоновом режиме
+    context.application.create_task(handle_button_logic(query, context))
+
+async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle button logic in background."""
     user_id = query.from_user.id
     balance = await get_user_balance(user_id)
     
@@ -497,10 +515,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit(query.edit_message_text(
             text="Выберите стиль для вашего изображения:",
             reply_markup=reply_markup
-        )
+        ))
     
     elif query.data == "check_balance":
         # Create inline keyboard for balance options
@@ -510,11 +528,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit(query.edit_message_text(
             text=f"Ваш текущий баланс: ⭐ {balance} звезд\n"
                 f"Стоимость одной генерации: ⭐ {GENERATION_COST} звезд\n",
             reply_markup=reply_markup
-        )
+        ))
     
     elif query.data == "use_my_name":
         # Обработка кнопки "Использовать моё имя"
@@ -533,7 +551,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         balance = get_user_balance(user_id)
         balance_text = f"Стоимость: ⭐ {GENERATION_COST} звезд | Ваш баланс: ⭐ {balance} звезд"
         
-        await query.edit_message_text(
+        await safe_edit(query.edit_message_text(
             text=f"🔮 Отлично! Имя для гравировки: <b>{user_name}</b>\n\n"
                  f"Теперь укажите аксессуары для вашей игрушки в следующем сообщении.\n"
                  f"Например: солнцезащитные очки, микрофон, гитара\n\n"
@@ -542,7 +560,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 [InlineKeyboardButton("Отменить", callback_data="generate_image")]
             ]),
             parse_mode="HTML"
-        )
+        ))
         return
         
     elif query.data == "topup_balance":
@@ -552,17 +570,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            await context.bot.send_message(
+            await safe_send(context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=topup_text,
                 reply_markup=create_topup_menu()
-            )
+            ))
         else:
             # Если это обычное сообщение, редактируем его
-            await query.edit_message_text(
+            await safe_edit(query.edit_message_text(
                 text=topup_text,
                 reply_markup=create_topup_menu()
-            )
+            ))
     
     elif query.data.startswith("buy_stars_"):
         stars_amount = int(query.data.split("_")[2])
@@ -597,7 +615,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             try:
                 # Отправляем счет на оплату
-                await context.bot.send_invoice(
+                await safe_send(context.bot.send_invoice(
                     chat_id=user_id,
                     title=title,
                     description=description,
@@ -611,21 +629,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     need_shipping_address=False,
                     is_flexible=False,
                     start_parameter="pay"  # Добавляем start_parameter для правильной обработки
-                )
+                ))
                 
-                await query.edit_message_text(
+                await safe_edit(query.edit_message_text(
                     text=f"Счет на оплату {stars_amount} звезд создан. Пожалуйста, оплатите его, чтобы пополнить баланс.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
-                )
+                ))
                 
                 # Логируем успешное создание счета
                 logger.info(f"Счет на оплату {stars_amount} звезд успешно создан для пользователя {user_id}")
             except Exception as e:
                 logger.error(f"Ошибка при создании счета: {e}")
-                await query.edit_message_text(
+                await safe_edit(query.edit_message_text(
                     text=f"Произошла ошибка при создании счета. Пожалуйста, попробуйте позже.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
-                )
+                ))
 
     elif query.data == "invite_friend":
         # Сообщение с инструкциями по партнерской программе
@@ -638,13 +656,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         
         # Редактируем существующее сообщение
-        await query.edit_message_text(
+        await safe_edit(query.edit_message_text(
             text=message,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
-        )
+        ))
         
     elif query.data == "help":
-        await query.edit_message_text(
+        await safe_edit(query.edit_message_text(
             text="Как использовать бота:\n\n"
                 "1. Отправьте фотографию или нажмите кнопку 'Сгенерировать изображение'\n"
                 "2. Выберите желаемый стиль (различные варианты доступны)\n"
@@ -660,7 +678,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "/balance - Проверить баланс\n"
                 "/help - Эта справка",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]])
-        )
+        ))
     
     elif query.data.startswith("style_"):
         # Обработка выбора стиля
@@ -712,7 +730,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data['user_data']['waiting_for_toy_name'] = True
                 
                 # Отправляем сообщение с просьбой указать имя для гравировки
-                await query.edit_message_text(
+                await safe_edit(query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                          f"Сначала укажите имя для гравировки на коробке игрушки.\n"
                          f"Это имя будет выгравировано на упаковке.\n\n"
@@ -722,16 +740,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         [InlineKeyboardButton("Отменить", callback_data="generate_image")]
                     ]),
                     parse_mode="HTML"
-                )
+                ))
             else:
                 # Если недостаточно средств, отправляем стандартное сообщение о недостатке средств
-                await query.edit_message_text(
+                await safe_edit(query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                          f"{action_text}\n\n"
                          f"{balance_text}",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="HTML"
-                )
+                ))
             return
             
         # Проверяем, выбран ли стиль "Свой стиль"
@@ -742,7 +760,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Проверяем, достаточно ли средств у пользователя
             if balance_sufficient:
                 # Отправляем сообщение с просьбой описать желаемый стиль
-                await query.edit_message_text(
+                await safe_edit(query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                          f"Пожалуйста, опишите желаемый стиль в следующем сообщении.\n"
                          f"Например: В стиле персонажа SIMS с зеленым ромбом над головой!\n\n"
@@ -751,27 +769,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         [InlineKeyboardButton("Отменить", callback_data="generate_image")]
                     ]),
                     parse_mode="HTML"
-                )
+                ))
             else:
                 # Если недостаточно средств, отправляем стандартное сообщение о недостатке средств
-                await query.edit_message_text(
+                await safe_edit(query.edit_message_text(
                     text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                          f"{action_text}\n\n"
                          f"{balance_text}",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="HTML"
-                )
+                ))
             return
         
         # Для всех остальных стилей отправляем стандартное сообщение
         # Отправляем новое сообщение с инструкцией и призывом к действию
-        await query.edit_message_text(
+        await safe_edit(query.edit_message_text(
             text=f"🔮 Вы выбрали стиль: <b>{style_name}</b>\n\n"
                  f"{action_text}\n\n"
                  f"{balance_text}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
-        )
+        ))
         
         logger.info(f"Пользователь {user_id} выбрал стиль: {style_name}")
     
@@ -793,17 +811,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            await context.bot.send_message(
+            await safe_send(context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="Выберите стиль для вашего изображения:",
                 reply_markup=reply_markup
-            )
+            ))
         else:
             # Если это обычное сообщение, редактируем его
-            await query.edit_message_text(
+            await safe_edit(query.edit_message_text(
                 text="Выберите стиль для вашего изображения:",
                 reply_markup=reply_markup
-            )
+            ))
     
     elif query.data == "back_to_menu":
         menu_text = f"Главное меню\n\n"\
@@ -813,17 +831,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Проверяем, является ли сообщение фотографией
         if is_photo_message:
             # Если это фото, отправляем новое сообщение
-            await context.bot.send_message(
+            await safe_send(context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=menu_text,
                 reply_markup=create_main_menu()
-            )
+            ))
         else:
             # Если это обычное сообщение, редактируем его
-            await query.edit_message_text(
+            await safe_edit(query.edit_message_text(
                 text=menu_text,
                 reply_markup=create_main_menu()
-            )
+            ))
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the pre-checkout callback."""
