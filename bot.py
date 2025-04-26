@@ -206,8 +206,7 @@ async def generate_and_send_image(chat_id, image_data, prompt, context, user_id,
         # Отменяем задачу обновления статуса
         status_task.cancel()
         
-        # Списываем звезды
-        await update_user_balance(user_id, -GENERATION_COST)
+        # Звезды уже были списаны в функции process_photo, повторное списание не нужно
         current_balance = await get_user_balance(user_id)
         
         # Создаем кнопки для добавления после генерации - строго 3 кнопки
@@ -1195,8 +1194,7 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception as file_error:
             logger.warning(f"Не удалось удалить временный файл {file_path}: {file_error}")
         
-        # Deduct stars from user balance
-        await update_user_balance(user_id, -GENERATION_COST)
+        # Звезды уже списаны выше (строка ~1150), повторное списание не требуется
         current_balance = await get_user_balance(user_id)
         
         # Устанавливаем флаг, что баланс был списан - это поможет избежать двойного возврата при ошибке
