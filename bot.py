@@ -1813,8 +1813,10 @@ async def main() -> None:
         # Декоратор для измерения времени обработки апдейтов
         def log_processing_time(handler):
             async def wrapper(update, context, *args, **kwargs):
-                # Проверяем, есть ли временная метка на начало обработки
-                start_time = getattr(update, '_ts', time.time())
+                # Всегда устанавливаем временную метку при запуске обработчика
+                start_time = time.time()
+                # Устанавливаем метку в объект update, если она понадобится в обработчике
+                update._ts = start_time
                 try:
                     # Вызываем оригинальный обработчик
                     result = await handler(update, context, *args, **kwargs)
@@ -1839,12 +1841,8 @@ async def main() -> None:
             
         # Регистрируем обработчик ошибок
         async def error_handler(update, context):
-            # Проверяем, есть ли временная метка на начало обработки
-            if update and hasattr(update, '_ts'):
-                processing_time = (time.time() - update._ts) * 1000  # в мс
-                logger.error(f"Ошибка при обработке обновления: {context.error}, время: {processing_time:.1f} мс")
-            else:
-                logger.error(f"Ошибка при обработке обновления: {context.error}")
+            # Записываем ошибку в лог, не пытаясь получить время обработки
+            logger.error(f"Ошибка при обработке обновления: {context.error}")
             
             if update:
                 logger.error(f"Обновление, вызвавшее ошибку: {update}")
