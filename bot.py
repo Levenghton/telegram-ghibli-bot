@@ -70,16 +70,16 @@ print(f"BOT_USERNAME: {BOT_USERNAME if BOT_USERNAME else 'Не установл�
 print(f"OPENAI_API_KEY: {'***' + OPENAI_API_KEY[-4:] if OPENAI_API_KEY else 'Не установлен'}")
 
 # Constants for balance system
-INITIAL_BALANCE = 5  # Stars
-GENERATION_COST = 25  # Stars per generation
+INITIAL_BALANCE = 20  # Stars (увеличено для стартового баланса)
+GENERATION_COST = 100  # Stars per generation (увеличено в 4 раза)
 
 # Constants for Telegram Stars payments
 STARS_PACKAGES = [
-    {"stars": 25, "price": 25, "label": "1 фото"},
-    {"stars": 50, "price": 50, "label": "2 фото"},
-    {"stars": 100, "price": 100, "label": "4 фото"},
-    {"stars": 250, "price": 250, "label": "10 фото"},
-    {"stars": 500, "price": 500, "label": "20 фото"}
+    {"stars": 100, "price": 100, "label": "1 фото"},
+    {"stars": 200, "price": 200, "label": "2 фото"},
+    {"stars": 400, "price": 400, "label": "4 фото"},
+    {"stars": 1000, "price": 1000, "label": "10 фото"},
+    {"stars": 2000, "price": 2000, "label": "20 фото"}
 ]
 
 # Импортируем асинхронные функции для работы с PostgreSQL
