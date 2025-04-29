@@ -505,7 +505,10 @@ async def handle_button_logic(query, context: ContextTypes.DEFAULT_TYPE) -> None
         keyboard = [
             [InlineKeyboardButton("Ghibli (Аниме)", callback_data="style_ghibli")],
             [InlineKeyboardButton("Disney", callback_data="style_disney")],
+            [InlineKeyboardButton("Pixar", callback_data="style_pixar")],
+            [InlineKeyboardButton("Zootopia", callback_data="style_zootopia")],
             [InlineKeyboardButton("Lego", callback_data="style_lego")],
+            [InlineKeyboardButton("Minecraft", callback_data="style_minecraft")],
             [InlineKeyboardButton("Кукла Блайз", callback_data="style_blythe")],
             [InlineKeyboardButton("Симпсоны", callback_data="style_simpsons")],
             [InlineKeyboardButton("Игрушка", callback_data="style_toy")],
@@ -954,7 +957,10 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     style_display_names = {
         "ghibli": "Ghibli (Аниме)",
         "disney": "Disney",
+        "pixar": "Pixar",
+        "zootopia": "Zootopia",
         "lego": "Lego",
+        "minecraft": "Minecraft",
         "blythe": "Кукла Блайз",
         "simpsons": "Симпсоны",
         "toy": "Игрушка",
@@ -1115,6 +1121,30 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 
                 # Выходим из функции, чтобы не генерировать изображение пока
                 return
+        elif selected_style == "minecraft":
+            prompt = """
+            Transform this person into a Minecraft character.
+            Use characteristic Minecraft voxel/blocky style with pixelated features.
+            Keep consistent with Minecraft's distinct block-based aesthetic.
+            Maintain the person's key features while adapting them to the cube-based Minecraft style.
+            Include some Minecraft environment elements or items in the background.
+            """
+        elif selected_style == "pixar":
+            prompt = """
+            Transform this person into a Pixar animation character.
+            Use Pixar's distinctive 3D animation style with expressive features.
+            Add characteristic Pixar lighting and vibrant colors.
+            Maintain the person's likeness and key features while adapting to Pixar style.
+            Include suitable Pixar-style environment elements in the background.
+            """
+        elif selected_style == "zootopia":
+            prompt = """
+            Transform this person into a Zootopia-style anthropomorphic animal character.
+            Choose an animal that matches their personality and features.
+            Use Zootopia's distinctive animation style with expressive features.
+            Maintain recognizable elements of the person's appearance adapted to animal form.
+            Include Zootopia-style city elements in the background.
+            """
         elif selected_style == "blythe":
             prompt = """
             Transform this person into a Blythe doll.
